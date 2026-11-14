@@ -11,6 +11,19 @@ pub fn url() -> String {
     url_from(std::env::var("VERY_NORMAL_MUSIC").ok())
 }
 
+/// What `m` plays, in words: Drone Zone by name, or whatever you set instead.
+pub fn source() -> String {
+    source_of(&url())
+}
+
+fn source_of(url: &str) -> String {
+    if url == DEFAULT_URL {
+        "SomaFM's Drone Zone (somafm.com)".to_string()
+    } else {
+        url.to_string()
+    }
+}
+
 fn url_from(var: Option<String>) -> String {
     var.filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_URL.to_string())
@@ -51,7 +64,7 @@ impl Music {
 
     /// Starts the stream, or says why it can't.
     pub fn start(&mut self) -> Result<(), String> {
-        let missing = "No player for the music: `brew install mpv`, or set VERY_NORMAL_MUSIC. Any gentle music you like works just as well.";
+        let missing = "No player for the music: `brew install mpv` (or ffmpeg, for ffplay). Any gentle music you like works just as well.";
         let cmd = player_command(&url(), on_path).ok_or_else(|| missing.to_string())?;
         let child = Command::new(&cmd[0])
             .args(&cmd[1..])
@@ -99,6 +112,12 @@ mod tests {
         assert_eq!(url_from(None), DEFAULT_URL);
         assert_eq!(url_from(Some(String::new())), DEFAULT_URL);
         assert_eq!(url_from(Some("http://x/y".into())), "http://x/y");
+    }
+
+    #[test]
+    fn names_drone_zone_and_shows_anything_else_as_set() {
+        assert_eq!(source_of(DEFAULT_URL), "SomaFM's Drone Zone (somafm.com)");
+        assert_eq!(source_of("~/calm.mp3"), "~/calm.mp3");
     }
 
     #[test]

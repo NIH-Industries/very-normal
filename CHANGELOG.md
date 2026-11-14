@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The practice clock reads "7:00 of 10:00 done" instead of counting down.
+- The help screen and `--help` say what `m` plays (SomaFM's Drone Zone, or your `VERY_NORMAL_MUSIC`), and the no-player message stops suggesting `VERY_NORMAL_MUSIC`, which only picks the stream.
 - `?` opens a help screen on every screen except mid-drill: how the guided session runs, what each drill is for at your stage, and the keys.
 - Keys are ignored for a moment after a drill ends, so the letters you were still typing when the clock ran out can't stop the music or quit from the report.
 

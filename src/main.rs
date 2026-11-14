@@ -38,7 +38,8 @@ usage: very-normal                  a guided session: layout, warm-up, practice
 Progress lives in ~/.local/share/very-normal/progress.json ($VERY_NORMAL_DATA).
 Plans live in ~/.config/very-normal ($VERY_NORMAL_PLAN). The Oryx layout comes
 from your plan ($VERY_NORMAL_LAYOUT); URLs open with `open`, or `xdg-open` on
-Linux ($VERY_NORMAL_OPEN, where {url} marks the address).
+Linux ($VERY_NORMAL_OPEN, where {url} marks the address). `m` plays SomaFM's
+Drone Zone with mpv or ffplay ($VERY_NORMAL_MUSIC: any stream URL or file).
 ";
 
 fn main() -> Result<()> {

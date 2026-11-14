@@ -594,9 +594,12 @@ impl App {
         let mut lines = vec![
             head("The guided session"),
             Line::raw(format!(
-                "Layout, warm-up, ten minutes of practice, report. Practice goes real text, then new keys and review in turn. Its clock counts typing time only, so it moves between drills. Practice ends after the drill that passes 10:00, or after two runs in a row under {BLOCK_ACCURACY:.0}%."
+                "Layout, warm-up, ten minutes of practice, report. Practice goes real text, then new keys and review in turn. The clock counts typing time only and moves between drills. It ends after the drill that passes 10:00, or two runs in a row under {BLOCK_ACCURACY:.0}%."
             )),
-            Line::raw(""),
+            Line::raw(format!(
+                "m plays music on the layout, warm-up and report: {}. Set VERY_NORMAL_MUSIC to any stream URL or file to change it.",
+                crate::music::source()
+            )),
             head(&format!("The drills, at stage {stage}")),
         ];
         for m in Mode::ALL {
@@ -609,12 +612,11 @@ impl App {
             ]));
         }
         lines.extend([
-            Line::raw(""),
             head("Keys"),
-            Line::raw("enter start · esc stop a drill unsaved, or end practice · m music · q quit · ctrl-c quit anywhere"),
+            Line::raw("enter start · esc stop a drill unsaved, or end practice · q quit · ctrl-c quit anywhere"),
         ]);
         let area = frame.area();
-        let width = area.width.saturating_sub(4).min(100);
+        let width = area.width.min(100);
         let rect = Rect::new(
             area.x + (area.width - width) / 2,
             area.y,
@@ -748,7 +750,8 @@ impl App {
         .areas(frame.area());
         self.render_keyboard(frame, keyboard, now, false);
         let done = self.block.as_ref().map_or(0.0, PracticeBlock::secs);
-        let left = (BLOCK_SECS - done).max(0.0) as u64;
+        let done = done.min(BLOCK_SECS) as u64;
+        let total = BLOCK_SECS as u64;
         let mut lines = vec![
             Line::from(vec![
                 Span::styled(
@@ -756,7 +759,13 @@ impl App {
                     Style::new().fg(PINK).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("   {}:{:02} of practice left", left / 60, left % 60),
+                    format!(
+                        "   {}:{:02} of {}:{:02} done",
+                        done / 60,
+                        done % 60,
+                        total / 60,
+                        total % 60
+                    ),
                     dim(),
                 ),
             ]),
@@ -1849,7 +1858,7 @@ mod guided_tests {
         let now = Instant::now();
         app.practice_next(75.0, 12.0, 97.0, now);
         let s = text(&draw(&app));
-        assert!(s.contains("8:45 of practice left"), "{s}");
+        assert!(s.contains("1:15 of 10:00 done"), "{s}");
         assert!(s.contains(Mode::Words.label()), "{s}");
         assert!(s.contains(app.drill.expected().unwrap()), "{s}");
         assert!(s.contains("voyager"), "{s}");
