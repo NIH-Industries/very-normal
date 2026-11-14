@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `?` opens a help screen on every screen except mid-drill: how the guided session runs, what each drill is for at your stage, and the keys.
 - Keys are ignored for a moment after a drill ends, so the letters you were still typing when the clock ran out can't stop the music or quit from the report.
 
 ## 0.4.0 - 2026-11-14

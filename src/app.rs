@@ -8,7 +8,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
 use crate::drill::{Drill, Mode, Rng, build};
 use crate::gate;
@@ -100,6 +100,8 @@ pub struct App {
     abandons: Vec<Instant>,
     /// Keys before this are ignored: a drill just ended under your fingers.
     settle_until: Option<Instant>,
+    /// The help screen is open over whatever's showing.
+    help: bool,
     pub should_quit: bool,
 }
 
@@ -140,6 +142,7 @@ impl App {
             music: Music::default(),
             abandons: Vec::new(),
             settle_until: None,
+            help: false,
             should_quit: false,
         }
     }
@@ -373,6 +376,14 @@ impl App {
         if self.settle_until.is_some_and(|t| now < t) {
             return;
         }
+        if self.help {
+            self.help = false;
+            return;
+        }
+        if key.code == KeyCode::Char('?') && !self.typing {
+            self.help = true;
+            return;
+        }
         if key.code == KeyCode::Char('m')
             && matches!(self.phase, Phase::Layout | Phase::Warmup | Phase::Report)
         {
@@ -565,6 +576,65 @@ impl App {
     }
 
     pub fn render(&self, frame: &mut Frame, now: Instant) {
+        self.render_screen(frame, now);
+        if self.help {
+            self.render_help(frame);
+        }
+    }
+
+    /// What the session is, what each drill is for, and the keys, over the current screen.
+    fn render_help(&self, frame: &mut Frame) {
+        let stage = self.stage();
+        let head = |t: &str| {
+            Line::styled(
+                t.to_string(),
+                Style::new().fg(PINK).add_modifier(Modifier::BOLD),
+            )
+        };
+        let mut lines = vec![
+            head("The guided session"),
+            Line::raw(format!(
+                "Layout, warm-up, ten minutes of practice, report. Practice goes real text, then new keys and review in turn. Its clock counts typing time only, so it moves between drills. Practice ends after the drill that passes 10:00, or after two runs in a row under {BLOCK_ACCURACY:.0}%."
+            )),
+            Line::raw(""),
+            head(&format!("The drills, at stage {stage}")),
+        ];
+        for m in Mode::ALL {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{}  ", m.label()),
+                    Style::new().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(m.describe(stage)),
+            ]));
+        }
+        lines.extend([
+            Line::raw(""),
+            head("Keys"),
+            Line::raw("enter start · esc stop a drill unsaved, or end practice · m music · q quit · ctrl-c quit anywhere"),
+        ]);
+        let area = frame.area();
+        let width = area.width.saturating_sub(4).min(100);
+        let rect = Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y,
+            width,
+            area.height,
+        );
+        frame.render_widget(Clear, rect);
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(
+                    Block::bordered()
+                        .border_style(Style::new().fg(PINK))
+                        .title(" help · any key closes "),
+                )
+                .wrap(Wrap { trim: false }),
+            rect,
+        );
+    }
+
+    fn render_screen(&self, frame: &mut Frame, now: Instant) {
         match self.phase {
             Phase::Layout => return self.render_layout(frame, now),
             Phase::Warmup => {
@@ -575,7 +645,7 @@ impl App {
                 }
                 frame.render_widget(
                     Paragraph::new(format!(
-                        "enter next step · s skip the warm-up · {} · esc start practising",
+                        "enter next step · s skip the warm-up · {} · esc start practising · ? help",
                         self.music_help()
                     ))
                     .style(dim()),
@@ -630,7 +700,7 @@ impl App {
         } else if self.typing {
             "type the text · esc stops without saving"
         } else {
-            "←/→ stage · 1-6 drill · enter start · u warm-up · n new text · g charts · c check oryx · o open oryx · k/v/w tick · q quit"
+            "←/→ stage · 1-6 drill · enter start · u warm-up · n new text · g charts · c check oryx · o open oryx · k/v/w tick · ? help · q quit"
         };
         frame.render_widget(Paragraph::new(help).style(dim()), footer);
     }
@@ -658,8 +728,11 @@ impl App {
             main,
         );
         frame.render_widget(
-            Paragraph::new(format!("enter dashboard · {} · q quit", self.music_help()))
-                .style(dim()),
+            Paragraph::new(format!(
+                "enter dashboard · {} · ? help · q quit",
+                self.music_help()
+            ))
+            .style(dim()),
             footer,
         );
     }
@@ -712,7 +785,7 @@ impl App {
         let help = if self.typing {
             "type the text · esc stops this drill without saving"
         } else {
-            "enter start · esc end practice · q quit"
+            "enter start · esc end practice · ? help · q quit"
         };
         frame.render_widget(Paragraph::new(help).style(dim()), footer);
     }
@@ -782,7 +855,7 @@ impl App {
         }
         frame.render_widget(
             Paragraph::new(format!(
-                "enter warm up · {} · d dashboard · q quit",
+                "enter warm up · {} · d dashboard · ? help · q quit",
                 self.music_help()
             ))
             .style(dim()),
@@ -1680,6 +1753,27 @@ mod guided_tests {
         assert_eq!(app.phase, Phase::Report);
         assert!(app.block.is_none());
         assert!(app.message.as_ref().unwrap().0.contains("ten minutes"));
+    }
+
+    #[test]
+    fn question_mark_explains_the_drills_and_any_key_closes_it() {
+        let mut app = practising("help");
+        let now = Instant::now();
+        app.handle_key(key(KeyCode::Char('?')), now);
+        let s = text(&draw(&app));
+        assert!(
+            s.contains("The guided session") && s.contains("review"),
+            "{s}"
+        );
+        app.handle_key(key(KeyCode::Char('q')), now);
+        assert!(
+            !app.help && !app.should_quit,
+            "the key that closes help does nothing else"
+        );
+        app.handle_key(key(KeyCode::Enter), now);
+        assert!(app.typing);
+        app.handle_key(key(KeyCode::Char('?')), now);
+        assert!(!app.help, "? is just a key to type during a drill");
     }
 
     #[test]
