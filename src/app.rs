@@ -61,12 +61,20 @@ pub fn practice_mode(i: usize) -> Mode {
 #[derive(Debug, Default)]
 struct PracticeBlock {
     started_ms: u64,
+    /// Typing time and runs from earlier today, when this picks up a session.
+    carried_secs: f64,
+    carried_runs: usize,
+    /// Runs since it started or was picked up.
     runs: Vec<(f64, f64)>,
 }
 
 impl PracticeBlock {
     fn secs(&self) -> f64 {
-        self.runs.iter().map(|(secs, _)| secs).sum()
+        self.carried_secs + self.runs.iter().map(|(secs, _)| secs).sum::<f64>()
+    }
+
+    fn count(&self) -> usize {
+        self.carried_runs + self.runs.len()
     }
 }
 
@@ -102,7 +110,29 @@ pub struct App {
     settle_until: Option<Instant>,
     /// The help screen is open over whatever's showing.
     help: bool,
+    /// How far the help screen is scrolled, and the most it can be at the last draw.
+    help_scroll: u16,
+    help_max_scroll: std::cell::Cell<u16>,
     pub should_quit: bool,
+}
+
+/// Words in lines of at most `width` columns (a longer word gets a line of its own).
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            out.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
 }
 
 fn now_ms() -> u64 {
@@ -143,6 +173,8 @@ impl App {
             abandons: Vec::new(),
             settle_until: None,
             help: false,
+            help_scroll: 0,
+            help_max_scroll: std::cell::Cell::new(0),
             should_quit: false,
         }
     }
@@ -198,17 +230,15 @@ impl App {
         }
         self.progress.warmed_up = Some(coach::today(now_ms()));
         self.save();
-        self.message = Some(if completed {
-            (
-                "Warmed up. Fingers loose, shoulders down. Press enter to start.".into(),
-                true,
-            )
+        let warm = if completed {
+            "Warmed up. Fingers loose, shoulders down."
         } else {
-            (
-                "Skipping the warm-up. That's fine; go gently for the first minute.".into(),
-                true,
-            )
-        });
+            "Skipping the warm-up. That's fine; go gently for the first minute."
+        };
+        let next = self
+            .resume_note()
+            .unwrap_or_else(|| "Press enter to start.".into());
+        self.message = Some((format!("{warm} {next}"), true));
     }
 
     fn toggle_music(&mut self) {
@@ -234,18 +264,34 @@ impl App {
 
     fn start_practice(&mut self, now: Instant) {
         self.phase = Phase::Practice;
-        self.block = Some(PracticeBlock {
-            started_ms: now_ms(),
-            ..PracticeBlock::default()
-        });
-        self.mode = practice_mode(0);
+        let block = match coach::unfinished(&self.progress.runs, now_ms()) {
+            Some(u) => PracticeBlock {
+                started_ms: u.started_ms,
+                carried_secs: u.secs,
+                carried_runs: u.runs,
+                ..PracticeBlock::default()
+            },
+            None => PracticeBlock {
+                started_ms: now_ms(),
+                ..PracticeBlock::default()
+            },
+        };
+        self.mode = practice_mode(block.count());
+        self.block = Some(block);
+        self.message = self.resume_note().map(|n| (n, true));
         self.new_drill(now);
+    }
+
+    /// Says so when practice picks up today's session instead of starting at 0:00.
+    fn resume_note(&self) -> Option<String> {
+        self.block.as_ref().filter(|b| b.carried_runs > 0)?;
+        Some("Picking up today's session where you left off. Press enter to carry on.".into())
     }
 
     fn end_practice(&mut self, message: String, now: Instant) {
         let block = self.block.take();
         self.phase = Phase::Dashboard;
-        if let Some(b) = block.filter(|b| !b.runs.is_empty()) {
+        if let Some(b) = block.filter(|b| b.count() > 0) {
             self.phase = Phase::Report;
             self.report = report::session(&self.progress, self.stage(), b.started_ms);
         }
@@ -275,7 +321,7 @@ impl App {
                 now,
             );
         }
-        self.mode = practice_mode(block.runs.len());
+        self.mode = practice_mode(block.count());
         self.new_drill(now);
         self.message = Some((
             format!("{wpm:.0} WPM · {acc:.1}% accuracy. Press enter for the next drill."),
@@ -377,11 +423,20 @@ impl App {
             return;
         }
         if self.help {
-            self.help = false;
+            match key.code {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.help_scroll = (self.help_scroll + 1).min(self.help_max_scroll.get())
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1)
+                }
+                _ => self.help = false,
+            }
             return;
         }
         if key.code == KeyCode::Char('?') && !self.typing {
             self.help = true;
+            self.help_scroll = 0;
             return;
         }
         if key.code == KeyCode::Char('m')
@@ -582,56 +637,116 @@ impl App {
         }
     }
 
-    /// What the session is, what each drill is for, and the keys, over the current screen.
-    fn render_help(&self, frame: &mut Frame) {
+    /// The help screen's lines at `width` columns: sections with room around
+    /// them, and names in a column of their own.
+    fn help_lines(&self, width: usize) -> Vec<Line<'static>> {
         let stage = self.stage();
-        let head = |t: &str| {
-            Line::styled(
-                t.to_string(),
-                Style::new().fg(PINK).add_modifier(Modifier::BOLD),
-            )
+        let head = |t: String| Line::styled(t, Style::new().fg(PINK).add_modifier(Modifier::BOLD));
+        let para = |lines: &mut Vec<Line<'static>>, text: &str| {
+            for l in wrap(text, width.saturating_sub(2)) {
+                lines.push(Line::raw(format!("  {l}")));
+            }
+            lines.push(Line::raw(""));
+        };
+        // a name in its own column, its text wrapped beside it
+        let item = |lines: &mut Vec<Line<'static>>, name: &str, col: usize, text: &str| {
+            for (i, l) in wrap(text, width.saturating_sub(2 + col))
+                .into_iter()
+                .enumerate()
+            {
+                let name = if i == 0 { name } else { "" };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {name:col$}"),
+                        Style::new().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(l),
+                ]));
+            }
         };
         let mut lines = vec![
-            head("The guided session"),
-            Line::raw(format!(
-                "Layout, warm-up, ten minutes of practice, report. Practice goes real text, then new keys and review in turn. The clock counts typing time only and moves between drills. It ends after the drill that passes 10:00, or two runs in a row under {BLOCK_ACCURACY:.0}%."
-            )),
-            Line::raw(format!(
-                "m plays music on the layout, warm-up and report: {}. Set VERY_NORMAL_MUSIC to any stream URL or file to change it.",
-                crate::music::source()
-            )),
-            head(&format!("The drills, at stage {stage}")),
+            Line::raw(""),
+            head("The guided session".into()),
+            Line::raw(""),
         ];
+        para(
+            &mut lines,
+            "Layout, warm-up, ten minutes of practice, then a report. Practice starts with real text, then takes new keys and review in turn.",
+        );
+        para(
+            &mut lines,
+            &format!(
+                "The clock counts typing time only, so it moves between drills, not while you rest. Practice ends after the drill that passes 10:00, or after two runs in a row under {BLOCK_ACCURACY:.0}%. Quit before 10:00 and the next practice today picks up where you left off."
+            ),
+        );
+        lines.push(head(format!("The drills, at stage {stage}")));
+        lines.push(Line::raw(""));
+        let col = Mode::ALL
+            .iter()
+            .map(|m| m.label().chars().count())
+            .max()
+            .unwrap_or(0)
+            + 3;
         for m in Mode::ALL {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{}  ", m.label()),
-                    Style::new().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(m.describe(stage)),
-            ]));
+            item(&mut lines, m.label(), col, &m.describe(stage));
+            lines.push(Line::raw(""));
         }
-        lines.extend([
-            head("Keys"),
-            Line::raw("enter start · esc stop a drill unsaved, or end practice · q quit · ctrl-c quit anywhere"),
-        ]);
+        lines.push(head("Music".into()));
+        lines.push(Line::raw(""));
+        para(
+            &mut lines,
+            &format!(
+                "m plays {} on the layout, warm-up and report screens. Set VERY_NORMAL_MUSIC to any stream URL or file to play something else.",
+                crate::music::source()
+            ),
+        );
+        lines.push(head("Keys".into()));
+        lines.push(Line::raw(""));
+        for (k, what) in [
+            ("enter", "start a drill"),
+            (
+                "esc",
+                "stop a drill without saving, or end practice between drills",
+            ),
+            ("m", "music, on the layout, warm-up and report"),
+            ("q", "quit, between drills"),
+            ("ctrl-c", "quit, anywhere"),
+            ("?", "this help, anywhere but mid-drill"),
+        ] {
+            item(&mut lines, k, 9, what);
+        }
+        lines
+    }
+
+    /// What the session is, what each drill is for, and the keys, over the current screen.
+    fn render_help(&self, frame: &mut Frame) {
         let area = frame.area();
-        let width = area.width.min(100);
+        let width = area.width.min(84);
         let rect = Rect::new(
             area.x + (area.width - width) / 2,
             area.y,
             width,
             area.height,
         );
+        let lines = self.help_lines(width.saturating_sub(4) as usize);
+        let inner = rect.height.saturating_sub(2);
+        let max = (lines.len() as u16).saturating_sub(inner);
+        self.help_max_scroll.set(max);
+        let title = if max > 0 {
+            " help · ↑/↓ scroll · any other key closes "
+        } else {
+            " help · any key closes "
+        };
         frame.render_widget(Clear, rect);
         frame.render_widget(
             Paragraph::new(lines)
                 .block(
                     Block::bordered()
                         .border_style(Style::new().fg(PINK))
-                        .title(" help · any key closes "),
+                        .title(title)
+                        .padding(ratatui::widgets::Padding::horizontal(1)),
                 )
-                .wrap(Wrap { trim: false }),
+                .scroll((self.help_scroll.min(max), 0)),
             rect,
         );
     }
@@ -1765,14 +1880,51 @@ mod guided_tests {
     }
 
     #[test]
+    fn picks_up_todays_session_under_ten_minutes() {
+        let mut app = guided("resume", Some(coach::today(now_ms())));
+        let t = now_ms();
+        for i in 0..3u64 {
+            app.progress.runs.push(Run {
+                t: t - (3 - i) * 140_000,
+                stage: app.stage(),
+                mode: "words".into(),
+                wpm: 12.0,
+                acc: 97.0,
+                secs: 140.0,
+                ..Run::default()
+            });
+        }
+        app.handle_key(key(KeyCode::Enter), Instant::now());
+        app.handle_key(key(KeyCode::Char('s')), Instant::now());
+        assert_eq!(app.phase, Phase::Practice);
+        assert_eq!(app.mode, practice_mode(3), "the drills carry on in turn");
+        let s = text(&draw(&app));
+        assert!(s.contains("7:00 of 10:00 done"), "{s}");
+        assert!(s.contains("where you left off"), "{s}");
+
+        app.practice_next(180.0, 12.0, 97.0, Instant::now());
+        assert_eq!(app.phase, Phase::Report, "7:00 plus 3:00 finishes it");
+    }
+
+    #[test]
     fn question_mark_explains_the_drills_and_any_key_closes_it() {
         let mut app = practising("help");
         let now = Instant::now();
         app.handle_key(key(KeyCode::Char('?')), now);
         let s = text(&draw(&app));
+        assert!(s.contains("The guided session"), "{s}");
+        app.handle_key(key(KeyCode::Down), now);
+        assert!(app.help, "arrows scroll");
         assert!(
-            s.contains("The guided session") && s.contains("review"),
-            "{s}"
+            text(&draw(&app)) != s,
+            "80x24 is too short for it all, so it scrolls"
+        );
+        for _ in 0..100 {
+            app.handle_key(key(KeyCode::Down), now);
+        }
+        assert!(
+            text(&draw(&app)).contains("ctrl-c"),
+            "scrolls as far as the last line"
         );
         app.handle_key(key(KeyCode::Char('q')), now);
         assert!(

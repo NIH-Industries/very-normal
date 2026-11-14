@@ -88,6 +88,37 @@ fn minutes_on(runs: &[Run], date: NaiveDate) -> f64 {
         / 60.0
 }
 
+/// Today's guided session so far, when it hasn't reached `SESSION_MINUTES`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Unfinished {
+    /// When its first run began.
+    pub started_ms: u64,
+    /// Typing time so far.
+    pub secs: f64,
+    /// Runs so far.
+    pub runs: usize,
+}
+
+/// The guided session to pick up today, if there is one: today's runs in
+/// order, where a session ends as soon as it reaches `SESSION_MINUTES`.
+pub fn unfinished(runs: &[Run], now_ms: u64) -> Option<Unfinished> {
+    let today = day(now_ms);
+    let mut open: Option<Unfinished> = None;
+    for run in runs.iter().filter(|r| day(r.t) == today) {
+        let o = open.get_or_insert(Unfinished {
+            started_ms: run.t.saturating_sub((secs(run) * 1000.0) as u64),
+            secs: 0.0,
+            runs: 0,
+        });
+        o.secs += secs(run);
+        o.runs += 1;
+        if o.secs >= SESSION_MINUTES * 60.0 {
+            open = None;
+        }
+    }
+    open
+}
+
 /// How many sessions were practised on `date`: runs grouped where one began
 /// at least `SESSION_GAP` minutes after the last ended, counting the groups
 /// with at least `SESSION_MINUTES` of drill time.
@@ -386,6 +417,32 @@ mod tests {
 
     fn today() -> NaiveDate {
         day(noon())
+    }
+
+    #[test]
+    fn picks_up_today_until_ten_minutes() {
+        assert_eq!(unfinished(&[], noon()), None);
+        let seven = block(noon(), 7, 1.0);
+        let u = unfinished(&seven, noon() + 300 * MIN).unwrap();
+        assert_eq!((u.secs, u.runs), (420.0, 7));
+        assert_eq!(u.started_ms, noon() - 7 * MIN);
+
+        assert_eq!(
+            unfinished(&block(noon(), 10, 1.0), noon()),
+            None,
+            "ten minutes finishes it"
+        );
+        let mut more = block(noon(), 10, 1.0);
+        more.extend(block(noon() + 30 * MIN, 3, 1.0));
+        let u = unfinished(&more, noon() + 30 * MIN).unwrap();
+        assert_eq!((u.secs, u.runs), (180.0, 3), "the next one starts fresh");
+
+        let yesterday = block(noon() - 24 * 60 * MIN, 7, 1.0);
+        assert_eq!(
+            unfinished(&yesterday, noon()),
+            None,
+            "a new day starts fresh"
+        );
     }
 
     #[test]

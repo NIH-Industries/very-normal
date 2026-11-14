@@ -2,9 +2,10 @@
 
 ## Unreleased
 
+- Quit practice before 10:00 and the next practice that day picks up where you left off: the clock, the drill order and the report carry on. A session that reaches 10:00 is finished, so the next one starts at 0:00, as does each new day.
 - The practice clock reads "7:00 of 10:00 done" instead of counting down.
 - The help screen and `--help` say what `m` plays (SomaFM's Drone Zone, or your `VERY_NORMAL_MUSIC`), and the no-player message stops suggesting `VERY_NORMAL_MUSIC`, which only picks the stream.
-- `?` opens a help screen on every screen except mid-drill: how the guided session runs, what each drill is for at your stage, and the keys.
+- `?` opens a help screen on every screen except mid-drill: how the guided session runs, what each drill is for at your stage, the music and the keys, spaced out in sections. ↑/↓ scroll it on a short terminal.
 - Keys are ignored for a moment after a drill ends, so the letters you were still typing when the clock ran out can't stop the music or quit from the report.
 
 ## 0.4.0 - 2026-11-14
