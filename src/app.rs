@@ -1,7 +1,7 @@
 //! The TUI: stage, keyboard map, next Oryx edits, gate, and the trainer.
 
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -42,6 +42,10 @@ pub enum Phase {
 pub const BLOCK_SECS: f64 = 600.0;
 /// Two runs in a row under this accuracy end a practice block early.
 pub const BLOCK_ACCURACY: f64 = 95.0;
+/// How long keys are ignored after a drill ends, so the letters you were still
+/// typing when the clock ran out don't land on whatever screen comes next and
+/// stop the music or quit.
+pub const SETTLE: Duration = Duration::from_millis(1500);
 
 /// The drill for the `i`th run of a practice block: real text while you're
 /// fresh, then new keys and review in turn.
@@ -94,6 +98,8 @@ pub struct App {
     /// When you recently gave up on a drill with esc; several close together
     /// usually means frustration.
     abandons: Vec<Instant>,
+    /// Keys before this are ignored: a drill just ended under your fingers.
+    settle_until: Option<Instant>,
     pub should_quit: bool,
 }
 
@@ -133,6 +139,7 @@ impl App {
             report: Vec::new(),
             music: Music::default(),
             abandons: Vec::new(),
+            settle_until: None,
             should_quit: false,
         }
     }
@@ -275,6 +282,7 @@ impl App {
 
     fn finish(&mut self, now: Instant) {
         self.typing = false;
+        self.settle_until = Some(now + SETTLE);
         let (stage, mode) = (self.drill.stage, self.drill.mode);
         // round once, so the number shown, the number saved and the number judged agree
         let wpm = (self.drill.wpm(now) * 10.0).round() / 10.0;
@@ -360,6 +368,9 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent, now: Instant) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.should_quit = true;
+            return;
+        }
+        if self.settle_until.is_some_and(|t| now < t) {
             return;
         }
         if key.code == KeyCode::Char('m')
@@ -1672,6 +1683,24 @@ mod guided_tests {
     }
 
     #[test]
+    fn keys_still_flying_when_a_drill_ends_dont_stop_the_music_or_quit() {
+        let mut app = practising("settle");
+        let now = Instant::now();
+        app.practice_next(60.0, 12.0, 90.0, now);
+        app.handle_key(key(KeyCode::Enter), now);
+        app.handle_key(key(KeyCode::Char('~')), now);
+        app.finish(now);
+        assert_eq!(app.phase, Phase::Report, "two sloppy runs end the block");
+        for c in ['m', 'q', 'x'] {
+            app.handle_key(key(KeyCode::Char(c)), now + SETTLE / 2);
+        }
+        assert!(!app.should_quit);
+        assert_eq!(app.phase, Phase::Report);
+        app.handle_key(key(KeyCode::Char('q')), now + SETTLE);
+        assert!(app.should_quit);
+    }
+
+    #[test]
     fn two_sloppy_runs_in_a_row_end_it_early() {
         let mut app = practising("sloppy");
         let now = Instant::now();
@@ -1759,7 +1788,7 @@ mod guided_tests {
                 break;
             }
         }
-        app.handle_key(key(KeyCode::Esc), now);
+        app.handle_key(key(KeyCode::Esc), now + SETTLE * 2);
         assert_eq!(app.phase, Phase::Report);
         assert!(!app.report.is_empty());
         let s = text(&draw(&app));
@@ -1772,7 +1801,7 @@ mod guided_tests {
                 "{s}"
             );
         }
-        app.handle_key(key(KeyCode::Enter), now);
+        app.handle_key(key(KeyCode::Enter), now + SETTLE * 2);
         assert_eq!(app.phase, Phase::Dashboard);
 
         let mut app = practising("report-q");

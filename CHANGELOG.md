@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keys are ignored for a moment after a drill ends, so the letters you were still typing when the clock ran out can't stop the music or quit from the report.
+
 ## 0.4.0 - 2026-11-14
 
 - Plain `very-normal` starts a guided session. It shows the layout on its own, then the warm-up, then ten minutes of practice it picks for you, real text first. It stops early after two sloppy runs. The old screen moves to `very-normal dashboard`.
