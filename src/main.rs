@@ -14,7 +14,7 @@ const HELP: &str = "\
 very-normal: move your keyboard to a layout made from your own typing
 
 usage: very-normal                  a guided session: layout, warm-up, practice
-       very-normal dashboard        the trainer with everything on one screen
+       very-normal dashboard        the whole plan: where you are, roughly how long is left
        very-normal status           what the coach thinks of your practice today
        very-normal next             the Oryx edits for the next stage, and where to make them
        very-normal check            read the layout from Oryx and compare it with your stage
@@ -226,7 +226,7 @@ fn main() -> Result<()> {
 }
 
 /// The first run, with no plan and no progress yet: offers to make a layout
-/// from your own typing. Says whether to carry on into the trainer.
+/// from your own typing. Says whether to carry on into the app.
 fn welcome(progress: &std::path::Path) -> Result<bool> {
     let projects = corpus::claude_projects();
     let typed = corpus::typed_messages(&projects).len();

@@ -1,4 +1,4 @@
-//! The TUI: stage, keyboard map, next Oryx edits, gate, and the trainer.
+//! The TUI: the layout, warm-up, drill, report and help screens, and the dashboard of the whole plan.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
 use crate::drill::{Drill, Mode, Rng, build};
 use crate::gate;
+use crate::journey;
 use crate::layout;
 use crate::music::Music;
 use crate::store::{Progress, Run};
@@ -100,7 +101,7 @@ pub struct App {
     /// The guided practice block, while it runs.
     block: Option<PracticeBlock>,
     /// The end-of-session report, once practice is over.
-    report: Vec<String>,
+    report: report::SessionReport,
     /// Background music, while it plays.
     music: Music,
     /// When you recently gave up on a drill with esc; several close together
@@ -114,6 +115,34 @@ pub struct App {
     help_scroll: u16,
     help_max_scroll: std::cell::Cell<u16>,
     pub should_quit: bool,
+}
+
+/// Each drill's own colour, the same on the practice screen, the help and the report.
+pub fn mode_color(mode: Mode) -> Color {
+    match mode {
+        Mode::Real => Color::Yellow,
+        Mode::Words => PINK,
+        Mode::Review => TEAL,
+        Mode::Recall => Color::Green,
+        Mode::Links => Color::Blue,
+        Mode::Mirror => Color::LightRed,
+    }
+}
+
+/// `name` in a column `col` wide, indented two, with `text` wrapped beside it
+/// in `width` columns.
+fn hanging(name: &str, style: Style, col: usize, text: &str, width: usize) -> Vec<Line<'static>> {
+    wrap(text, width.saturating_sub(2 + col))
+        .into_iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let name = if i == 0 { name } else { "" };
+            Line::from(vec![
+                Span::styled(format!("  {name:col$}"), style),
+                Span::raw(l),
+            ])
+        })
+        .collect()
 }
 
 /// Words in lines of at most `width` columns (a longer word gets a line of its own).
@@ -168,7 +197,7 @@ impl App {
             override_armed: false,
             warmup: None,
             block: None,
-            report: Vec::new(),
+            report: report::SessionReport::default(),
             music: Music::default(),
             abandons: Vec::new(),
             settle_until: None,
@@ -217,10 +246,6 @@ impl App {
                 self.finish(now);
             }
         }
-    }
-
-    fn needs_warmup(&self) -> bool {
-        self.progress.warmed_up.as_deref() != Some(coach::today(now_ms()).as_str())
     }
 
     fn end_warmup(&mut self, completed: bool, now: Instant) {
@@ -280,6 +305,25 @@ impl App {
         self.block = Some(block);
         self.message = self.resume_note().map(|n| (n, true));
         self.new_drill(now);
+    }
+
+    /// Whether the coach lets a drill of your own start: when it says stop, the
+    /// first enter explains and the second goes ahead anyway.
+    fn coach_allows(&mut self) -> bool {
+        let advice = self.advice();
+        if advice.blocks() && !self.override_armed {
+            self.override_armed = true;
+            self.message = Some((
+                format!(
+                    "{} Press enter again to practise anyway, rebel.",
+                    advice.message
+                ),
+                false,
+            ));
+            return false;
+        }
+        self.override_armed = false;
+        true
     }
 
     /// Says so when practice picks up today's session instead of starting at 0:00.
@@ -527,12 +571,20 @@ impl App {
         if self.phase == Phase::Practice {
             match key.code {
                 KeyCode::Enter | KeyCode::Tab | KeyCode::Char(' ') => {
+                    // a guided session is never stopped mid-way; a drill of your own can be
+                    if self.block.is_none() && !self.coach_allows() {
+                        return;
+                    }
                     if self.drill.done || self.drill.started() {
                         self.new_drill(now);
                     }
                     self.message = None;
                     self.drill.touch(now);
                     self.typing = true;
+                }
+                KeyCode::Esc if self.block.is_none() => {
+                    self.phase = Phase::Dashboard;
+                    self.message = None;
                 }
                 KeyCode::Esc => {
                     self.end_practice("Practice stopped. Come back whenever you like.".into(), now)
@@ -551,42 +603,14 @@ impl App {
             }
             KeyCode::Char(d @ '1'..='6') => {
                 self.mode = Mode::ALL[d as usize - '1' as usize];
+                self.block = None;
+                self.phase = Phase::Practice;
                 self.message = None;
                 self.new_drill(now);
             }
-            KeyCode::Enter | KeyCode::Tab | KeyCode::Char(' ') => {
-                let advice = self.advice();
-                if advice.blocks() && !self.override_armed {
-                    self.override_armed = true;
-                    self.message = Some((
-                        format!(
-                            "{} Press enter again to practise anyway, rebel.",
-                            advice.message
-                        ),
-                        false,
-                    ));
-                    return;
-                }
-                self.override_armed = false;
-                if self.needs_warmup() {
-                    self.warmup = Some(Warmup::new(now));
-                    self.message = None;
-                    return;
-                }
-                if self.drill.done || self.drill.started() {
-                    self.new_drill(now);
-                }
+            KeyCode::Enter => {
+                self.phase = Phase::Layout;
                 self.message = None;
-                self.drill.touch(now);
-                self.typing = true;
-            }
-            KeyCode::Char('u') => {
-                self.warmup = Some(Warmup::new(now));
-                self.message = None;
-            }
-            KeyCode::Char('n') => {
-                self.message = None;
-                self.new_drill(now);
             }
             KeyCode::Char('c') => {
                 self.check = match oryx::fetch(&self.layout_id) {
@@ -649,21 +673,7 @@ impl App {
             lines.push(Line::raw(""));
         };
         // a name in its own column, its text wrapped beside it
-        let item = |lines: &mut Vec<Line<'static>>, name: &str, col: usize, text: &str| {
-            for (i, l) in wrap(text, width.saturating_sub(2 + col))
-                .into_iter()
-                .enumerate()
-            {
-                let name = if i == 0 { name } else { "" };
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("  {name:col$}"),
-                        Style::new().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(l),
-                ]));
-            }
-        };
+        let bold = Style::new().add_modifier(Modifier::BOLD);
         let mut lines = vec![
             Line::raw(""),
             head("The guided session".into()),
@@ -688,7 +698,13 @@ impl App {
             .unwrap_or(0)
             + 3;
         for m in Mode::ALL {
-            item(&mut lines, m.label(), col, &m.describe(stage));
+            lines.extend(hanging(
+                m.label(),
+                bold.fg(mode_color(m)),
+                col,
+                &m.describe(stage),
+                width,
+            ));
             lines.push(Line::raw(""));
         }
         lines.push(head("Music".into()));
@@ -703,7 +719,11 @@ impl App {
         lines.push(head("Keys".into()));
         lines.push(Line::raw(""));
         for (k, what) in [
-            ("enter", "start a drill"),
+            ("enter", "start a drill; on the dashboard, today's session"),
+            (
+                "1-6",
+                "on the dashboard, a drill of your own: no clock, esc comes back",
+            ),
             (
                 "esc",
                 "stop a drill without saving, or end practice between drills",
@@ -713,7 +733,7 @@ impl App {
             ("ctrl-c", "quit, anywhere"),
             ("?", "this help, anywhere but mid-drill"),
         ] {
-            item(&mut lines, k, 9, what);
+            lines.extend(hanging(k, bold, 9, what, width));
         }
         lines
     }
@@ -774,74 +794,139 @@ impl App {
             Phase::Report => return self.render_report(frame),
             Phase::Dashboard => {}
         }
-        // tall enough for the next stage's edits (plus any check) and the gate
-        let next_lines = report::next_stage_compact(self.stage(), "").len()
-            + if self.check.is_empty() {
-                0
-            } else {
-                self.check.len() + 1
-            };
-        let gate_lines = gate::items(&self.progress, self.stage())
-            .iter()
-            .map(|i| 1 + usize::from(!i.detail.is_empty()))
-            .sum::<usize>()
-            + 1;
-        // the trainer keeps at least 8 rows; the middle panels take what is left
-        let spare = frame.area().height.saturating_sub(3 + 1 + 5 + 1 + 8);
-        let middle_height = ((next_lines.max(gate_lines) + 2).min(18) as u16).min(spare);
-        let [header, blurb, keyboard, middle, trainer, footer] = Layout::vertical([
-            Constraint::Length(3),
+        let s = self.stage();
+        let journey = journey::journey(&self.progress, now_ms());
+        let passed = gate::passed(&self.progress, s);
+        // the gate, or once it's passed the edits for the next stage
+        let lower = if passed {
+            report::next_stage_compact(s, "").len()
+                + if self.check.is_empty() {
+                    0
+                } else {
+                    self.check.len() + 1
+                }
+        } else {
+            gate::items(&self.progress, s)
+                .iter()
+                .map(|i| 1 + usize::from(!i.detail.is_empty()))
+                .sum::<usize>()
+        } + 2;
+        let [header, _, journey_area, lower_area, message, footer] = Layout::vertical([
+            Constraint::Length(2),
             Constraint::Length(1),
-            Constraint::Length(5),
-            Constraint::Length(middle_height),
             Constraint::Fill(1),
+            Constraint::Length(lower as u16),
+            Constraint::Length(u16::from(self.message.is_some())),
             Constraint::Length(1),
         ])
         .areas(frame.area());
-        self.render_header(frame, header);
-        frame.render_widget(
-            Paragraph::new(layout::blurb(self.stage()))
-                .style(dim())
-                .wrap(Wrap { trim: true }),
-            blurb,
-        );
-        self.render_keyboard(frame, keyboard, now, true);
-        let [next, gate] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .areas(middle);
-        self.render_next(frame, next);
-        self.render_gate(frame, gate);
-        self.render_trainer(frame, trainer, now);
-        let help = if self.warmup.is_some() {
-            "enter next step · s skip the warm-up · esc pause"
-        } else if self.typing {
-            "type the text · esc stops without saving"
+        self.render_header(frame, header, &journey);
+        self.render_journey(frame, journey_area, &journey);
+        if passed && s < layout::last() {
+            self.render_next(frame, lower_area);
         } else {
-            "←/→ stage · 1-6 drill · enter start · u warm-up · n new text · g charts · c check oryx · o open oryx · k/v/w tick · ? help · q quit"
-        };
-        frame.render_widget(Paragraph::new(help).style(dim()), footer);
+            self.render_gate(frame, lower_area);
+        }
+        if let Some((msg, good)) = &self.message {
+            let color = if *good { Color::Green } else { Color::Yellow };
+            frame.render_widget(
+                Paragraph::new(msg.clone()).style(Style::new().fg(color)),
+                message,
+            );
+        }
+        frame.render_widget(
+            Paragraph::new(
+                "enter session · 1-6 drill · ←/→ stage · g charts · o/c oryx · ? help · q quit",
+            )
+            .style(dim()),
+            footer,
+        );
+        let _ = now;
     }
 
     /// The end of a guided session.
     fn render_report(&self, frame: &mut Frame) {
         let [main, footer] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
-        let mut lines = Vec::new();
+        let width = main.width.saturating_sub(4) as usize;
+        let r = &self.report;
+        let head = |t: &str| {
+            Line::styled(
+                t.to_string(),
+                Style::new().fg(PINK).add_modifier(Modifier::BOLD),
+            )
+        };
+        let bold = Style::new().add_modifier(Modifier::BOLD);
+        let mut lines = vec![Line::raw("")];
         if let Some((msg, _)) = &self.message {
-            lines.push(Line::styled(msg.clone(), Style::new().fg(Color::Green)));
+            for l in wrap(msg, width) {
+                lines.push(Line::styled(l, Style::new().fg(Color::Green)));
+            }
+        }
+        let advice = self.advice();
+        lines.push(Line::styled(
+            format!(
+                "Today: {} of {} sessions.",
+                advice.sessions_today,
+                coach::SESSIONS_PER_DAY
+            ),
+            dim(),
+        ));
+        lines.push(Line::raw(""));
+        if !r.drills.is_empty() {
+            lines.push(head("Drills"));
+            lines.push(Line::raw(""));
+            let col = r
+                .drills
+                .iter()
+                .map(|d| d.mode.label().chars().count())
+                .max()
+                .unwrap_or(0)
+                + 3;
+            for d in &r.drills {
+                let mut first = hanging(
+                    d.mode.label(),
+                    bold.fg(mode_color(d.mode)),
+                    col,
+                    &d.stats(),
+                    width,
+                );
+                lines.append(&mut first);
+                lines.push(Line::styled(format!("  {:col$}{}", "", d.compared), dim()));
+            }
             lines.push(Line::raw(""));
         }
-        for l in &self.report {
-            lines.push(Line::raw(l.clone()));
+        if !r.slowest.is_empty() {
+            lines.push(head("Slowest keys"));
+            lines.push(Line::raw(""));
+            for k in &r.slowest {
+                lines.push(Line::raw(format!("  {k}")));
+            }
+            lines.push(Line::raw(""));
+        }
+        lines.push(head("Before the next stage"));
+        lines.push(Line::raw(""));
+        if r.to_come.is_empty() {
+            lines.push(Line::raw("  Every gate item for this stage is done."));
+        }
+        for item in &r.to_come {
+            lines.extend(hanging("·", Style::new(), 2, item, width));
+        }
+        lines.push(Line::raw(""));
+        if let Some(t) = &r.trend {
+            lines.push(head("Real text"));
+            lines.push(Line::raw(""));
+            for l in wrap(t, width.saturating_sub(2)) {
+                lines.push(Line::raw(format!("  {l}")));
+            }
         }
         frame.render_widget(
-            Paragraph::new(lines)
-                .block(
-                    Block::bordered()
-                        .border_style(Style::new().fg(TEAL))
-                        .title(" this session "),
-                )
-                .wrap(Wrap { trim: true }),
+            Paragraph::new(lines).block(
+                Block::bordered()
+                    .border_style(Style::new().fg(TEAL))
+                    .title(" this session ")
+                    .padding(ratatui::widgets::Padding::horizontal(1)),
+            ),
             main,
         );
         frame.render_widget(
@@ -871,16 +956,22 @@ impl App {
             Line::from(vec![
                 Span::styled(
                     self.mode.label().to_string(),
-                    Style::new().fg(PINK).add_modifier(Modifier::BOLD),
+                    Style::new()
+                        .fg(mode_color(self.mode))
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!(
-                        "   {}:{:02} of {}:{:02} done",
-                        done / 60,
-                        done % 60,
-                        total / 60,
-                        total % 60
-                    ),
+                    if self.block.is_some() {
+                        format!(
+                            "   {}:{:02} of {}:{:02} done",
+                            done / 60,
+                            done % 60,
+                            total / 60,
+                            total % 60
+                        )
+                    } else {
+                        String::new()
+                    },
                     dim(),
                 ),
             ]),
@@ -909,7 +1000,11 @@ impl App {
         let help = if self.typing {
             "type the text · esc stops this drill without saving"
         } else {
-            "enter start · esc end practice · ? help · q quit"
+            if self.block.is_some() {
+                "enter start · esc end practice · ? help · q quit"
+            } else {
+                "enter start · esc back to the dashboard · ? help · q quit"
+            }
         };
         frame.render_widget(Paragraph::new(help).style(dim()), footer);
     }
@@ -987,9 +1082,8 @@ impl App {
         );
     }
 
-    fn render_header(&self, frame: &mut Frame, area: Rect) {
+    fn render_header(&self, frame: &mut Frame, area: Rect, journey: &[journey::StageLine]) {
         let s = self.stage();
-        let (home, sfb) = layout::stats(s);
         let title = Line::from(vec![
             Span::styled(
                 format!("{}  ", layout::plan().name.to_lowercase()),
@@ -999,53 +1093,113 @@ impl App {
                 format!("stage {s} of {} · {}", layout::last(), layout::name(s)),
                 Style::new().add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                format!("   {home}% home row · {sfb}% same-finger pairs"),
-                dim(),
-            ),
         ]);
-        let mut steps = Vec::new();
-        for i in 0..=layout::last() {
-            let passed = gate::passed(&self.progress, i);
-            let style = if i == s {
-                Style::new()
-                    .fg(Color::Black)
-                    .bg(PINK)
-                    .add_modifier(Modifier::BOLD)
-            } else if passed {
-                Style::new().fg(Color::Green)
-            } else {
-                dim()
-            };
-            steps.push(Span::styled(
-                format!(" {i}{} ", if passed { "✓" } else { "" }),
-                style,
-            ));
-            steps.push(Span::raw(" "));
-        }
-        let advice = self.advice();
-        let (icon, color) = match advice.level {
-            coach::Level::Good => ("✓", Color::Green),
-            coach::Level::Nudge => ("»", Color::Yellow),
-            coach::Level::Stop => ("✋", Color::LightRed),
+        let current_left = journey.iter().find_map(|l| match l.status {
+            journey::Status::Current { left, .. } => Some(left),
+            _ => None,
+        });
+        let ahead_known = journey
+            .iter()
+            .any(|l| matches!(l.status, journey::Status::Ahead(Some(_))));
+        let outlook = match (journey::remaining(journey), current_left.flatten()) {
+            (Some(days), _) => format!(
+                "At your recent pace, the rest of the plan is likely {}.",
+                journey::vague(days)
+            ),
+            (None, Some(_)) => {
+                "Stages ahead get a time guess once this one is behind you, from your own pace."
+                    .to_string()
+            }
+            (None, None) => format!(
+                "Time guesses come after {} real-text sessions at 95%+{}.",
+                report::TREND_SESSIONS,
+                if ahead_known {
+                    ""
+                } else {
+                    ", and once a stage is done"
+                }
+            ),
         };
-        let coach_line = Line::from(vec![
-            Span::styled(
-                format!("{icon} {}", advice.message),
-                Style::new().fg(color).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(
-                    "   today {}/{} sessions · session {:.0} min",
-                    advice.sessions_today,
-                    coach::SESSIONS_PER_DAY,
-                    advice.session_minutes
-                ),
-                dim(),
-            ),
-        ]);
         frame.render_widget(
-            Paragraph::new(vec![title, Line::from(steps), coach_line]),
+            Paragraph::new(vec![title, Line::styled(outlook, dim())]),
+            area,
+        );
+    }
+
+    /// Every stage of the plan: what it moves, how long the finished ones took,
+    /// and a rough guess at the rest once there's data for one.
+    fn render_journey(&self, frame: &mut Frame, area: Rect, journey: &[journey::StageLine]) {
+        let name_w = journey
+            .iter()
+            .map(|l| l.name.chars().count())
+            .max()
+            .unwrap_or(0);
+        let keys = |l: &journey::StageLine| {
+            l.keys
+                .iter()
+                .map(char::to_string)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let keys_w = journey
+            .iter()
+            .map(|l| keys(l).chars().count())
+            .max()
+            .unwrap_or(0);
+        let top = journey.iter().map(|l| l.share).fold(0.0, f64::max).max(1.0);
+        let baseline = self.progress.baseline();
+        let mut lines = Vec::new();
+        for l in journey {
+            let (mark, style) = match l.status {
+                journey::Status::Done(_) => ("✓", Style::new().fg(Color::Green)),
+                journey::Status::Current { .. } => {
+                    ("▶", Style::new().fg(PINK).add_modifier(Modifier::BOLD))
+                }
+                journey::Status::Ahead(_) => (" ", Style::new()),
+            };
+            let bar = if l.share > 0.0 {
+                let n = ((l.share / top) * 10.0).round().max(1.0) as usize;
+                format!("{:<10} {:>3.0}%", "█".repeat(n), l.share)
+            } else {
+                " ".repeat(15)
+            };
+            let when = match &l.status {
+                journey::Status::Done(_) if l.stage == 0 => {
+                    baseline.map_or("done".to_string(), |b| format!("qwerty at {b:.0} WPM"))
+                }
+                journey::Status::Done(Some((d, m))) => journey::spent(*d, *m),
+                journey::Status::Done(None) => "done".to_string(),
+                journey::Status::Current {
+                    days,
+                    minutes,
+                    left,
+                } => {
+                    let so_far = format!("{} so far", journey::spent(*days, *minutes));
+                    match left {
+                        Some(d) => format!("{so_far} · likely {} more", journey::vague(*d)),
+                        None => so_far,
+                    }
+                }
+                journey::Status::Ahead(Some(d)) => format!("~{}", journey::vague(*d)),
+                journey::Status::Ahead(None) => String::new(),
+            };
+            let name_style = if matches!(l.status, journey::Status::Ahead(_)) {
+                dim()
+            } else {
+                style
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {mark} {:>2} ", l.stage), style),
+                Span::styled(format!("{:<name_w$}  ", l.name), name_style),
+                Span::styled(format!("{:<keys_w$}  ", keys(l)), Style::new().fg(TEAL)),
+                Span::styled(format!("{bar}   "), Style::new().fg(PINK)),
+                Span::styled(when, dim()),
+            ]));
+        }
+        frame.render_widget(
+            Paragraph::new(lines).block(Block::bordered().title(" the plan ").title_bottom(
+                Line::styled(" bars: how much of your typing each stage moves ", dim()),
+            )),
             area,
         );
     }
@@ -1137,7 +1291,10 @@ impl App {
                     .map(|l| Line::styled(l.clone(), Style::new().fg(TEAL))),
             );
         }
-        let block = Block::bordered().title(" next oryx edits (o open · c check) ");
+        let block = Block::bordered().title(format!(
+            " gate passed: oryx edits for stage {} (o open · c check) ",
+            (s + 1).min(layout::last())
+        ));
         frame.render_widget(
             Paragraph::new(lines)
                 .block(block)
@@ -1240,68 +1397,6 @@ impl App {
         );
     }
 
-    fn render_trainer(&self, frame: &mut Frame, area: Rect, now: Instant) {
-        if let Some(w) = &self.warmup {
-            self.render_warmup(frame, area, w, now);
-            return;
-        }
-        let s = self.stage();
-        let mut tabs = Vec::new();
-        for (n, m) in Mode::ALL.iter().enumerate() {
-            let style = if *m == self.mode {
-                Style::new()
-                    .fg(Color::Black)
-                    .bg(Color::White)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                dim()
-            };
-            tabs.push(Span::styled(format!(" {} {} ", n + 1, m.label()), style));
-            tabs.push(Span::raw(" "));
-        }
-        let mut lines = vec![Line::from(tabs), Line::styled(self.mode.describe(s), dim())];
-        if let Some(line) = self.leaning_line() {
-            lines.push(line);
-        }
-        lines.push(Line::raw(""));
-        lines.extend(self.text_lines());
-        lines.push(Line::raw(""));
-        lines.push(self.status_line(now));
-        if let Some((msg, good)) = &self.message {
-            // misses are yellow, not red: they're information, not a telling-off
-            let color = if *good { Color::Green } else { Color::Yellow };
-            lines.push(Line::styled(msg.clone(), Style::new().fg(color)));
-        }
-        let recent: Vec<_> = self.progress.runs.iter().rev().take(3).collect();
-        if !recent.is_empty() {
-            lines.push(Line::raw(""));
-            for r in recent {
-                lines.push(Line::styled(
-                    format!(
-                        "  stage {} · {:<14} {:>3.0} wpm  {:>5.1}%",
-                        r.stage,
-                        Mode::label_for(&r.mode),
-                        r.wpm,
-                        r.acc
-                    ),
-                    dim(),
-                ));
-            }
-        }
-        let border = if self.typing {
-            Style::new().fg(PINK)
-        } else {
-            Style::new()
-        };
-        let block = Block::bordered().border_style(border).title(" trainer ");
-        frame.render_widget(
-            Paragraph::new(lines)
-                .block(block)
-                .wrap(Wrap { trim: false }),
-            area,
-        );
-    }
-
     fn text_lines(&self) -> Vec<Line<'static>> {
         let d = &self.drill;
         if d.done {
@@ -1358,54 +1453,6 @@ impl App {
         }
         vec![Line::from(spans)]
     }
-
-    /// Names the keys the words lean on: extra reps, said kindly.
-    fn leaning_line(&self) -> Option<Line<'static>> {
-        let keys: Vec<String> = self.leaning.iter().map(char::to_string).collect();
-        let named = match keys.as_slice() {
-            [] => return None,
-            [one] => one.clone(),
-            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-        };
-        Some(Line::styled(
-            format!("A few extra words with {named} in them, your trickiest keys right now."),
-            dim(),
-        ))
-    }
-
-    fn status_line(&self, now: Instant) -> Line<'static> {
-        let d = &self.drill;
-        if !self.typing && self.needs_warmup() {
-            return Line::styled(
-                "Press enter to start. First session today, so a one-minute warm-up comes first.",
-                dim(),
-            );
-        }
-        if !self.typing {
-            return Line::styled(
-                "Press enter to start. If you hesitate, the key lights up on the map.",
-                dim(),
-            );
-        }
-        if !d.started() {
-            return Line::styled(
-                "Go! The timer starts on your first key.",
-                Style::new().fg(PINK),
-            );
-        }
-        let progress = match d.remaining(now) {
-            Some(r) => format!("{}s left", r.as_secs() + u64::from(r.subsec_millis() > 0)),
-            None => format!("{}/{}", d.pos, d.text.len()),
-        };
-        Line::styled(
-            format!(
-                "{progress} · {:.0} wpm · {:.1}% accuracy",
-                d.wpm(now),
-                d.accuracy()
-            ),
-            Style::new().fg(TEAL),
-        )
-    }
 }
 
 fn dim() -> Style {
@@ -1452,19 +1499,45 @@ mod tests {
     }
 
     #[test]
-    fn shows_the_stage_and_the_next_edits() {
+    fn shows_the_whole_plan_and_the_gate_not_a_trainer() {
         let (app, _) = app();
         let s = screen(&app);
-        assert!(s.contains("stage 1 of 9"));
-        assert!(s.contains("Stage 2: I and O come home"));
-        assert!(s.contains("configure.zsa.io/voyager/layouts/"));
-        assert!(s.contains("keys: i→a  o→k  a→i  k→o (keep alt)"));
+        assert!(s.contains("stage 1 of 9"), "{s}");
+        for stage in 0..=layout::last() {
+            assert!(s.contains(layout::name(stage)), "{s}");
+        }
+        assert!(s.contains("gate before stage 2"), "{s}");
+        assert!(
+            !s.contains("voyager"),
+            "the map lives on the layout screen:\n{s}"
+        );
+        assert!(!s.contains("trainer"), "{s}");
+        assert!(
+            !s.contains("configure.zsa.io"),
+            "edits wait for the gate:\n{s}"
+        );
+        assert!(
+            s.contains("Time guesses come after 3 real-text sessions"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn a_passed_gate_shows_the_next_edits() {
+        let (mut app, _) = app();
+        app.progress.stage = 0;
+        app.progress.manual_mut(0).oryx = true;
+        app.progress.manual_mut(0).wpm = 35.0;
+        let s = screen(&app);
+        assert!(s.contains("Stage 1: E and T come home"), "{s}");
+        assert!(s.contains("configure.zsa.io/voyager/layouts/"), "{s}");
     }
 
     #[test]
     fn typing_a_whole_drill_records_a_run() {
         let (mut app, path) = app();
         let now = Instant::now();
+        app.handle_key(key(KeyCode::Char('2')), now);
         app.handle_key(key(KeyCode::Enter), now);
         let text: Vec<char> = app.drill.text.clone();
         for c in text {
@@ -1492,12 +1565,36 @@ mod tests {
     fn escape_abandons_a_drill_without_saving() {
         let (mut app, path) = app();
         let now = Instant::now();
+        app.handle_key(key(KeyCode::Char('1')), now);
         app.handle_key(key(KeyCode::Enter), now);
+        assert!(app.typing);
         app.handle_key(key(KeyCode::Char('x')), now);
         app.handle_key(key(KeyCode::Esc), now);
         assert!(!app.typing);
         assert!(app.progress.runs.is_empty());
+        assert_eq!(
+            app.phase,
+            Phase::Practice,
+            "the first esc just stops the drill"
+        );
+        app.handle_key(key(KeyCode::Esc), now);
+        assert_eq!(
+            app.phase,
+            Phase::Dashboard,
+            "the second goes back to the plan"
+        );
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn a_drill_of_your_own_has_no_session_clock() {
+        let (mut app, _) = app();
+        app.handle_key(key(KeyCode::Char('6')), Instant::now());
+        assert_eq!(app.mode, Mode::Mirror);
+        let s = screen(&app);
+        assert!(s.contains(Mode::Mirror.label()), "{s}");
+        assert!(!s.contains("of 10:00 done"), "{s}");
+        assert!(s.contains("esc back to the dashboard"), "{s}");
     }
 }
 
@@ -1531,6 +1628,10 @@ mod coach_tests {
         let mut app = App::new(p, path.clone(), Instant::now(), Phase::Dashboard);
         let enter =
             KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Press);
+        let two =
+            KeyEvent::new_with_kind(KeyCode::Char('2'), KeyModifiers::NONE, KeyEventKind::Press);
+        app.handle_key(two, Instant::now());
+        assert_eq!(app.phase, Phase::Practice, "1-6 open a drill of your own");
         app.handle_key(enter, Instant::now());
         assert!(!app.typing);
         assert!(app.message.as_ref().unwrap().0.contains("rebel"));
@@ -1550,7 +1651,7 @@ mod warmup_tests {
     }
 
     #[test]
-    fn the_first_drill_of_the_day_starts_with_a_warm_up() {
+    fn enter_on_the_dashboard_starts_a_guided_session_with_a_warm_up() {
         let path =
             std::env::temp_dir().join(format!("very-normal-warmup-{}.json", std::process::id()));
         let mut app = App::new(
@@ -1564,19 +1665,19 @@ mod warmup_tests {
         );
         let now = Instant::now();
         app.handle_key(key(KeyCode::Enter), now);
+        assert_eq!(app.phase, Phase::Layout);
+        app.handle_key(key(KeyCode::Enter), now);
         assert!(app.warmup.is_some() && !app.typing);
 
         app.handle_key(key(KeyCode::Char('s')), now);
         assert!(app.warmup.is_none());
+        assert_eq!(app.phase, Phase::Practice);
         let skipped = &app.message.as_ref().unwrap().0;
         assert!(
             !skipped.contains("Bold") && !skipped.contains("wrists"),
             "{skipped}"
         );
         assert_eq!(app.progress.warmed_up, Some(coach::today(now_ms())));
-
-        app.handle_key(key(KeyCode::Enter), now);
-        assert!(app.typing, "no second warm-up the same day");
         std::fs::remove_file(path).ok();
     }
 
@@ -1588,10 +1689,10 @@ mod warmup_tests {
             Progress::default(),
             path.clone(),
             Instant::now(),
-            Phase::Dashboard,
+            Phase::Layout,
         );
         let now = Instant::now();
-        app.handle_key(key(KeyCode::Char('u')), now);
+        app.handle_key(key(KeyCode::Enter), now);
         for _ in 0..warmup::STEPS.len() {
             app.handle_key(key(KeyCode::Enter), now);
         }
@@ -1647,6 +1748,7 @@ mod frustration_tests {
         };
         let mut app = App::new(p, path.clone(), Instant::now(), Phase::Dashboard);
         let key = |c| KeyEvent::new_with_kind(c, KeyModifiers::NONE, KeyEventKind::Press);
+        app.handle_key(key(KeyCode::Char('2')), Instant::now());
         for _ in 0..3 {
             app.handle_key(key(KeyCode::Enter), Instant::now());
             app.handle_key(key(KeyCode::Esc), Instant::now());
@@ -2047,7 +2149,11 @@ mod guided_tests {
         assert_eq!(app.phase, Phase::Report);
         assert!(!app.report.is_empty());
         let s = text(&draw(&app));
-        assert!(s.contains(&app.report[0][..20]), "{s}");
+        assert!(
+            s.contains("Drills") && s.contains("Before the next stage"),
+            "{s}"
+        );
+        assert!(s.contains(app.report.drills[0].mode.label()), "{s}");
         let help = s.lines().last().unwrap();
         assert!(help.contains("enter") && help.contains("q "), "{help}");
         for m in Mode::ALL {

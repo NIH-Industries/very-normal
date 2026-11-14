@@ -117,14 +117,78 @@ pub fn check(snap: &Snapshot, current: usize) -> Vec<String> {
     out
 }
 
+/// One drill type in the session report.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrillSummary {
+    pub mode: Mode,
+    pub runs: usize,
+    pub wpm: f64,
+    pub acc: f64,
+    /// Against recent sessions, or "first session".
+    pub compared: String,
+}
+
+impl DrillSummary {
+    /// "2 runs, 14.8 WPM at 96.1%"
+    pub fn stats(&self) -> String {
+        format!(
+            "{} run{}, {:.1} WPM at {:.1}%",
+            self.runs,
+            if self.runs == 1 { "" } else { "s" },
+            self.wpm,
+            self.acc
+        )
+    }
+}
+
+/// The end of a guided session, in sections.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SessionReport {
+    pub drills: Vec<DrillSummary>,
+    /// "k 1625ms (earlier 1159ms)", slowest first.
+    pub slowest: Vec<String>,
+    /// Gate items still open for this stage; empty when they're all done.
+    pub to_come: Vec<String>,
+    /// The real-text outlook, from stage 1 on.
+    pub trend: Option<String>,
+}
+
+impl SessionReport {
+    pub fn is_empty(&self) -> bool {
+        self.drills.is_empty() && self.to_come.is_empty() && self.trend.is_none()
+    }
+
+    /// The report as plain lines, one per section.
+    pub fn lines(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .drills
+            .iter()
+            .map(|d| format!("{}: {} ({})", d.mode.label(), d.stats(), d.compared))
+            .collect();
+        if !self.slowest.is_empty() {
+            out.push(format!("Slowest keys: {}", self.slowest.join(" · ")));
+        }
+        out.push(if self.to_come.is_empty() {
+            "Every gate item for this stage is done.".to_string()
+        } else {
+            format!(
+                "Still to come before the next stage: {}.",
+                self.to_come.join("; ")
+            )
+        });
+        out.extend(self.trend.clone());
+        out
+    }
+}
+
 /// The end of a guided session: how it went against the last few, and how
 /// far off the next stage is. Runs from `block_start_ms` on are this session.
-pub fn session(progress: &Progress, stage: usize, block_start_ms: u64) -> Vec<String> {
+pub fn session(progress: &Progress, stage: usize, block_start_ms: u64) -> SessionReport {
     let at_stage: Vec<&Run> = progress.runs.iter().filter(|r| r.stage == stage).collect();
     let (earlier, now): (Vec<&Run>, Vec<&Run>) =
         at_stage.iter().partition(|r| r.t < block_start_ms);
     let earlier = coach::group(&earlier);
-    let mut out = Vec::new();
+    let mut out = SessionReport::default();
 
     for mode in [Mode::Real, Mode::Words, Mode::Review] {
         let this: Vec<&Run> = now
@@ -153,12 +217,13 @@ pub fn session(progress: &Progress, stage: usize, block_start_ms: u64) -> Vec<St
                 acc - a
             )
         };
-        out.push(format!(
-            "{}: {} run{}, {wpm:.1} WPM at {acc:.1}% ({compared})",
-            mode.label(),
-            this.len(),
-            if this.len() == 1 { "" } else { "s" }
-        ));
+        out.drills.push(DrillSummary {
+            mode,
+            runs: this.len(),
+            wpm,
+            acc,
+            compared,
+        });
     }
 
     let mine = letters(&now);
@@ -170,7 +235,7 @@ pub fn session(progress: &Progress, stage: usize, block_start_ms: u64) -> Vec<St
         .collect();
     slow.sort_by(|a, b| b.1.total_cmp(&a.1));
     if !slow.is_empty() {
-        let keys: Vec<String> = slow
+        out.slowest = slow
             .iter()
             .take(3)
             .map(|(c, ms)| match before.get(*c).filter(|l| l.n > 0) {
@@ -178,7 +243,6 @@ pub fn session(progress: &Progress, stage: usize, block_start_ms: u64) -> Vec<St
                 None => format!("{c} {ms:.0}ms"),
             })
             .collect();
-        out.push(format!("Slowest keys: {}", keys.join(" · ")));
     }
 
     let items = gate::items(progress, stage);
@@ -187,20 +251,16 @@ pub fn session(progress: &Progress, stage: usize, block_start_ms: u64) -> Vec<St
         .filter(|i| !i.ok)
         .map(|i| i.label.as_str())
         .collect();
-    out.push(if left.is_empty() {
-        "Every gate item for this stage is done.".to_string()
-    } else {
-        format!("Still to come before the next stage: {}.", left.join("; "))
-    });
+    out.to_come = left.iter().map(|l| l.to_string()).collect();
 
     let real_done = stage > 0
         && items
             .iter()
             .any(|i| i.label.starts_with("Real text") && i.ok);
     if real_done {
-        out.push("Real text is there for this stage.".into());
+        out.trend = Some("Real text is there for this stage.".into());
     } else if stage > 0 {
-        out.push(match progress.baseline() {
+        out.trend = Some(match progress.baseline() {
             None => "Record a baseline in stage 0 to see a real-text trend.".into(),
             Some(b) => trend(&earlier, &now, b * gate::SPEED_SHARE),
         });
@@ -238,8 +298,57 @@ fn trend(earlier: &[Vec<&Run>], now: &[&Run], target: f64) -> String {
     let keep = if best(now).is_some() { 4 } else { 5 };
     points = points.split_off(points.len().saturating_sub(keep));
     points.extend(best(now));
-    if points.len() < 3 {
-        return "Not enough sessions yet to see a real-text trend. Give it a few.".into();
+    match fit(&points, target) {
+        Fit::TooFew => "Not enough sessions yet to see a real-text trend. Give it a few.".into(),
+        Fit::Flat => {
+            "No upward real-text trend yet. That's normal; it'll gradually come together.".into()
+        }
+        Fit::Sessions(sessions) => format!(
+            "At this pace, roughly {sessions} more session{} to reach {target:.0} WPM in real text. It'll gradually come together.",
+            if sessions == 1 { "" } else { "s" }
+        ),
+    }
+}
+
+/// Sessions with a real-text run at 95%+ before there's a trend to fit.
+pub const TREND_SESSIONS: usize = 3;
+
+/// What the real-text trend says about reaching `target`.
+enum Fit {
+    TooFew,
+    Flat,
+    Sessions(u64),
+}
+
+/// Sessions until the real-text trend at `stage` reaches the gate's speed, when
+/// there's an upward trend to go on.
+pub fn sessions_to_gate(progress: &Progress, stage: usize) -> Option<u64> {
+    let target = progress.baseline()? * gate::SPEED_SHARE;
+    let runs: Vec<&Run> = progress
+        .runs
+        .iter()
+        .filter(|r| r.stage == stage && r.mode == "real")
+        .collect();
+    let points: Vec<f64> = coach::group(&runs)
+        .iter()
+        .filter_map(|g| {
+            g.iter()
+                .filter(|r| r.acc >= gate::REAL_ACCURACY)
+                .map(|r| r.wpm)
+                .reduce(f64::max)
+        })
+        .collect();
+    let points = &points[points.len().saturating_sub(5)..];
+    match fit(points, target) {
+        Fit::Sessions(n) => Some(n),
+        _ => None,
+    }
+}
+
+/// A straight line through the best real-text speeds, one per session.
+fn fit(points: &[f64], target: f64) -> Fit {
+    if points.len() < TREND_SESSIONS {
+        return Fit::TooFew;
     }
     let n = points.len() as f64;
     let mean_x = (n - 1.0) / 2.0;
@@ -252,15 +361,10 @@ fn trend(earlier: &[Vec<&Run>], now: &[&Run], target: f64) -> String {
     }
     let slope = sxy / sxx;
     if slope <= 0.0 {
-        return "No upward real-text trend yet. That's normal; it'll gradually come together."
-            .into();
+        return Fit::Flat;
     }
     let fitted = mean_y + slope * (n - 1.0 - mean_x);
-    let sessions = ((target - fitted) / slope).ceil().max(1.0) as u64;
-    format!(
-        "At this pace, roughly {sessions} more session{} to reach {target:.0} WPM in real text. It'll gradually come together.",
-        if sessions == 1 { "" } else { "s" }
-    )
+    Fit::Sessions(((target - fitted) / slope).ceil().max(1.0) as u64)
 }
 
 #[cfg(test)]
@@ -322,7 +426,7 @@ mod tests {
             run(START + 60_000, "real", 12.0, 96.0),
             run(START + 120_000, "words", 13.0, 98.0),
         ]);
-        let r = session(&p, 1, START);
+        let r = session(&p, 1, START).lines();
         assert!(
             r[0].starts_with("real text 60s: 1 run, 12.0 WPM at 96.0% (first session)"),
             "{r:?}"
@@ -346,7 +450,7 @@ mod tests {
             run(START - 3 * HOUR, "words", 12.0, 99.0),
             run(START + 60_000, "words", 13.0, 98.5),
         ]);
-        let r = session(&p, 1, START);
+        let r = session(&p, 1, START).lines();
         assert!(
             r[0].contains("(+2.0 WPM, +0.5% against recent sessions)"),
             "{r:?}"
@@ -375,7 +479,7 @@ mod tests {
                 ms: 6_000.0,
             },
         );
-        let r = session(&progress(vec![before, now]), 1, START);
+        let r = session(&progress(vec![before, now]), 1, START).lines();
         let line = r.iter().find(|l| l.starts_with("Slowest keys")).unwrap();
         assert_eq!(
             line,
@@ -390,7 +494,7 @@ mod tests {
             run(START - 3 * HOUR, "real", 17.0, 97.0),
             run(START + 60_000, "real", 18.0, 96.0),
         ]);
-        let r = session(&p, 1, START);
+        let r = session(&p, 1, START).lines();
         let line = r.last().unwrap();
         assert!(
             line.contains("roughly 9 more sessions to reach 27 WPM"),
@@ -406,7 +510,7 @@ mod tests {
             run(START - 3 * HOUR, "real", 17.0, 97.0),
             run(START + 60_000, "real", 16.5, 96.0),
         ]);
-        let r = session(&p, 1, START);
+        let r = session(&p, 1, START).lines();
         let line = r.last().unwrap();
         assert!(line.contains("No upward real-text trend yet"), "{line}");
         assert!(line.contains("normal"), "{line}");

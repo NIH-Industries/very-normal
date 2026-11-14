@@ -54,6 +54,11 @@ impl Advice {
     }
 }
 
+/// How long a run took, counting old runs with no duration as a minute.
+pub fn run_secs(run: &Run) -> f64 {
+    secs(run)
+}
+
 fn secs(run: &Run) -> f64 {
     if run.secs > 0.0 {
         run.secs

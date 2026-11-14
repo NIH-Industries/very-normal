@@ -99,7 +99,7 @@ searched for.
 
 ```sh
 very-normal                  # a guided session: the layout, a warm-up, then practice
-very-normal dashboard        # the trainer, with everything on one screen
+very-normal dashboard        # the whole plan: where you are and roughly how long is left
 very-normal status           # what the coach thinks of your practice today
 very-normal next             # the Oryx edits for the next stage, and the link to make them
 very-normal check            # read the layout from Oryx and compare it with your stage
@@ -139,13 +139,23 @@ A guided session has four steps, one screen each:
    left before the next stage, and roughly how many sessions the real-text
    trend says it'll take. There's no rush.
 
-In the dashboard:
+The dashboard is the long view: every stage of the plan, with the keys it
+moves and a bar for how much of your typing that is (by English letter
+frequency, so the early stages are the big ones), how long finished stages
+took, and how far into this one you are. Below it, the gate for the next
+stage, or once that's passed, the Oryx edits to make.
 
-- `←` `→` change stage. `1`–`6` pick a drill: key recall, new keys, review,
-  60 seconds of real text, markdown links, or one-handed mirror practice.
-- `enter` starts typing. Wrong keys don't advance. If you pause, the key you
-  want lights up on the map. `esc` stops without saving.
-- `c` checks Oryx and `o` opens the layout there. `g` opens your charts.
+Time guesses only come from your own practice, never a made-up average. The
+stage you're on gets one after three real-text sessions at 95%+, from its
+trend; stages ahead get one once a stage is behind you, from the minutes per
+point of typing moved that it took you. They're ranges in words ("2–4
+weeks"), not dates.
+
+- `enter` starts today's session. `1`–`6` open one drill of your own on the
+  drill screen, with no clock: key recall, new keys, review, 60 seconds of
+  real text, markdown links, or one-handed mirror practice. `esc` comes back.
+- `←` `→` change stage. `c` checks Oryx and `o` opens the layout there. `g`
+  opens your charts.
 - `k`, `v` and `w` tick the gate's manual boxes.
 
 ## The coach
@@ -163,7 +173,7 @@ In the dashboard:
 
 ## Charts
 
-`very-normal charts` (or `g` in the trainer) writes
+`very-normal charts` (or `g` on the dashboard) writes
 `~/.local/share/very-normal/charts.html`, one self-contained page that works
 offline, and opens it. It shows:
 

@@ -4,6 +4,7 @@ pub mod coach;
 pub mod corpus;
 pub mod drill;
 pub mod gate;
+pub mod journey;
 pub mod keymap;
 pub mod layout;
 pub mod music;

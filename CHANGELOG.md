@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The dashboard is the long view of the plan and nothing else: every stage with the keys it moves, a bar for how much of your typing that is, how long finished stages took, how far into this one you are, and the gate (or, once it's passed, the next Oryx edits). The trainer, keyboard map and coach line are gone from it.
+- Time guesses come only from your own practice: the current stage's from its real-text trend after three sessions at 95%+, stages ahead from your pace on stages you've finished. Shown as ranges in words, never dates.
+- `1`–`6` on the dashboard open a drill of your own on the drill screen, with no session clock; `esc` comes back. `enter` starts today's guided session. `n` and `u` are gone.
+- The report says how many of today's two sessions you've done.
+- The end-of-session report is laid out in sections (drills, slowest keys, what's left before the next stage, the real-text outlook) with room between them, and each drill type has its own colour there, in the help and on the practice screen.
 - Quit practice before 10:00 and the next practice that day picks up where you left off: the clock, the drill order and the report carry on. A session that reaches 10:00 is finished, so the next one starts at 0:00, as does each new day.
 - The practice clock reads "7:00 of 10:00 done" instead of counting down.
 - The help screen and `--help` say what `m` plays (SomaFM's Drone Zone, or your `VERY_NORMAL_MUSIC`), and the no-player message stops suggesting `VERY_NORMAL_MUSIC`, which only picks the stream.
