@@ -82,7 +82,7 @@ pub fn list() -> Vec<String> {
 }
 
 /// Where you're starting from: a known layout's name, a plan (one you've
-/// made, by name, or any plan file) where it ends or at `:N` for its stage N,
+/// made, by name, or any plan file) where it ends or at `@N` for its stage N,
 /// or your own 30 keys written top row first.
 pub fn start(s: &str) -> Result<(String, String)> {
     if let Some((name, keys)) = named::find(s) {
@@ -96,14 +96,20 @@ pub fn start(s: &str) -> Result<(String, String)> {
     })
 }
 
-/// A plan's layout, when `s` names one: by file or by name, with an optional `:N` stage.
+/// A plan's layout, when `s` names one: by file or by name, with an optional `@N` stage,
+/// and `~` for your home folder.
 fn plan_start(s: &str) -> Result<Option<(String, String)>> {
-    let (target, stage) = match s.rsplit_once(':') {
+    let (target, stage) = match s.rsplit_once('@') {
         Some((p, n)) if !p.is_empty() && n.parse::<usize>().is_ok() => (p, Some(n.parse()?)),
         _ => (s, None),
     };
-    let plan = if Path::new(target).is_file() {
-        Plan::load(Path::new(target))?
+    let expanded = match (target.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => Path::new(&home).join(rest),
+        _ => PathBuf::from(target),
+    };
+    let target_path = expanded.as_path();
+    let plan = if target_path.is_file() {
+        Plan::load(target_path)?
     } else if made_path(target).is_file() {
         Plan::load(&made_path(target))?
     } else if slug(target) == builtin_slug() {
@@ -437,17 +443,28 @@ mod tests {
         assert_eq!(name, example.name, "a plan means where it ends");
         assert_eq!(keys, example.stages.last().unwrap().keys);
 
-        let (name, keys) = start(&format!("{f}:1")).unwrap();
+        let (name, keys) = start(&format!("{f}@1")).unwrap();
         assert_eq!(name, format!("{}, stage 1", example.name));
         assert_eq!(keys, example.stages[1].keys);
 
         assert!(
-            start(&format!("{f}:99"))
+            start(&format!("{f}@99"))
                 .unwrap_err()
                 .to_string()
                 .contains("stages 0 to")
         );
         assert!(start("/nowhere/at/all.toml").is_err());
+        assert!(
+            start(&format!("{f}:1")).is_err(),
+            ":1 isn't a stage, so that's no file"
+        );
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = PathBuf::from(home);
+            if let Ok(rest) = file.strip_prefix(&home) {
+                let (name, _) = start(&format!("~/{}@1", rest.display())).unwrap();
+                assert_eq!(name, format!("{}, stage 1", example.name));
+            }
+        }
         assert_eq!(start("dvorak").unwrap().0, "Dvorak");
         assert_eq!(
             start("qwertyuiop asdfghjkl; zxcvbnm,./").unwrap().1,

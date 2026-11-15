@@ -3,7 +3,7 @@
 ## Unreleased
 
 - `rename <plan> <new name>` gives a plan you made a better name: in the plan, its stage names, its summary, its files and any progress kept for it, even while you're practising it.
-- `make-plan --from` (and the first run's question) also takes a plan, by name or `.toml` file: where it ends, or `name:N` for its stage N. Any layout written as a plan can be a starting point.
+- `make-plan --from` (and the first run's question) also takes a plan, by name or `.toml` file: where it ends, or `name@N` for its stage N. Any layout written as a plan can be a starting point.
 - `--profile <name>` and `VERY_NORMAL_HOME=<dir>` keep a whole separate profile (progress, plan, made plans, charts) in one folder, for trying the first run or showing someone without touching your own progress. Named profiles live in `~/.local/share/very-normal/profiles/`.
 - The dashboard is the long view of the plan and nothing else: every stage with the keys it moves, a bar for how much of your typing that is, how long finished stages took, how far into this one you are, and the gate (or, once it's passed, the next Oryx edits). The trainer, keyboard map and coach line are gone from it.
 - Time guesses come only from your own practice: the current stage's from its real-text trend after three sessions at 95%+, stages ahead from your pace on stages you've finished. Shown as ranges in words, never dates.

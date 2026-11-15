@@ -99,7 +99,7 @@ for stdin. --no-claude leaves your Claude Code messages out.
 
 --from         the layout you type on now: QWERTY (the default), Dvorak, Colemak,
                Colemak-DH, Workman or Norman; a plan, by name or .toml file,
-               where it ends (or name:N for its stage N); or your own 30 keys
+               where it ends (or name@N for its stage N); or your own 30 keys
                written top row first, like 'qwertyuiop asdfghjkl; zxcvbnm,./'
 --lock         keys that stay where they are now (default: Q, W, Z, X, C and V for
                their Cmd shortcuts, and , . / '). Each one costs the layout a

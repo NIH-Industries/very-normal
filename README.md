@@ -54,8 +54,8 @@ very-normal make-plan --name "My Layout" --text ~/notes ~/Documents/emails.txt
 
 - `--from` is the layout you type on now: `qwerty` (the default), `dvorak`,
   `colemak`, `colemak-dh`, `workman` or `norman`; any plan, by its name or
-  its `.toml` file, which means the layout it ends at (`take-two:3` or
-  `plan.toml:3` for its stage 3); or your own 30 keys written top row first,
+  its `.toml` file, which means the layout it ends at (`take-two@3` or
+  `plan.toml@3` for its stage 3); or your own 30 keys written top row first,
   like `"qwertyuiop asdfghjkl; zxcvbnm,./"`. The stages start there. Since a
   plan file is the same format `make-plan` writes, any layout you can write
   as a plan can be a starting point.

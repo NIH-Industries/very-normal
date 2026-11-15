@@ -315,7 +315,7 @@ fn ask_start() -> Result<String> {
         println!("  {}  {name}", i + 1);
     }
     println!("  or type your own 30 keys, top row first, like qwertyuiop asdfghjkl; zxcvbnm,./");
-    println!("  or a plan's name or .toml file, for where it ends (add :N for its stage N)\n");
+    println!("  or a plan's name or .toml file, for where it ends (add @N for its stage N)\n");
     loop {
         let answer = ask("Layout [1]: ")?;
         let pick = match answer.as_str() {
