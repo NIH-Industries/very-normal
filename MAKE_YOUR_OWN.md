@@ -6,7 +6,7 @@ move from the layout you type on now (QWERTY, Dvorak, Colemak, Colemak-DH,
 Workman, Norman or your own) into small stages, and drill you through them.
 
 ```sh
-brew install markryall/tap/very-normal   # or: cargo install very-normal
+brew install nih-industries/tap/very-normal   # or: cargo install very-normal
 very-normal                  # the first run offers to make your layout
 very-normal make-plan --name "My Layout" --text ~/notes   # or do it any time
 very-normal use my-layout    # switch to it; your progress on each plan is kept
@@ -21,7 +21,7 @@ first plan becomes active by itself.
 
 I'm collecting layouts to see how much they vary between people.
 `very-normal share` opens a new issue on
-[markryall/very-normal](https://github.com/markryall/very-normal/issues)
+[NIH-Industries/very-normal](https://github.com/NIH-Industries/very-normal/issues)
 titled `Layout: <name>`, with your newest plan's summary from
 `~/.config/very-normal/plans/` as its body (`very-normal share <name>` picks
 another).

@@ -17,13 +17,13 @@ z x c v k   ; f , . /
 ## Install
 
 ```sh
-brew install markryall/tap/very-normal
+brew install nih-industries/tap/very-normal
 ```
 
 Or, on macOS or Linux without Homebrew:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/markryall/very-normal/releases/latest/download/very-normal-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/NIH-Industries/very-normal/releases/latest/download/very-normal-installer.sh | sh
 ```
 
 Or from source: `cargo install very-normal`.

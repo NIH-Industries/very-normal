@@ -32,7 +32,7 @@ const EFFORT: [[f64; 10]; 3] = [
 ];
 /// Fewer messages than this is too little to optimise for.
 pub const ENOUGH: usize = 200;
-const ISSUES: &str = "https://github.com/markryall/very-normal/issues/new";
+const ISSUES: &str = "https://github.com/NIH-Industries/very-normal/issues/new";
 
 // ------------------------------------------------------------------ options
 
@@ -1082,7 +1082,7 @@ fn summary(s: &SummaryInput) -> String {
          Scored on 20% of messages the optimiser never saw:\n\n{table}\n\
          The stages from {start_name}, most-typed letters first:\n\n{ladder}\n\
          <details><summary>The numbers, for comparing layouts</summary>\n\n```json\n{json}\n```\n\n</details>\n\n\
-         Made with [very-normal](https://github.com/markryall/very-normal) {version}.\n",
+         Made with [very-normal](https://github.com/NIH-Industries/very-normal) {version}.\n",
         name = s.name,
         pretty = pretty(s.target),
         messages = s.messages,
