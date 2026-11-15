@@ -80,15 +80,62 @@ impl LetterStat {
     }
 }
 
-/// `$VERY_NORMAL_DATA`, or `~/.local/share/very-normal/progress.json`.
+/// `$VERY_NORMAL_DATA`, or `progress.json` in `$VERY_NORMAL_HOME`, or
+/// `~/.local/share/very-normal/progress.json`.
 pub fn default_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("VERY_NORMAL_DATA") {
+    path_from(
+        std::env::var_os("VERY_NORMAL_DATA"),
+        std::env::var_os("VERY_NORMAL_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+/// Takes `--profile <name>` (or `--profile=<name>`) out of the arguments, and
+/// gives the folder that profile lives in:
+/// `~/.local/share/very-normal/profiles/<name>`.
+pub fn take_profile(
+    args: Vec<String>,
+    home: Option<std::ffi::OsString>,
+) -> anyhow::Result<(Vec<String>, Option<PathBuf>)> {
+    let mut rest = Vec::new();
+    let mut name = None;
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        if a == "--profile" {
+            name = Some(
+                it.next()
+                    .ok_or_else(|| anyhow::anyhow!("--profile needs a name"))?,
+            );
+        } else if let Some(n) = a.strip_prefix("--profile=") {
+            name = Some(n.to_string());
+        } else {
+            rest.push(a);
+        }
+    }
+    let Some(name) = name else {
+        return Ok((rest, None));
+    };
+    if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\']) {
+        anyhow::bail!("a profile name is a plain word, like `demo`, not {name:?}");
+    }
+    let dir = PathBuf::from(home.unwrap_or_default())
+        .join(".local/share/very-normal/profiles")
+        .join(name);
+    Ok((rest, Some(dir)))
+}
+
+fn path_from(
+    data: Option<std::ffi::OsString>,
+    profile: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> PathBuf {
+    if let Some(p) = data.filter(|p| !p.is_empty()) {
         return PathBuf::from(p);
     }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    home.join(".local/share/very-normal/progress.json")
+    if let Some(dir) = profile.filter(|p| !p.is_empty()) {
+        return PathBuf::from(dir).join("progress.json");
+    }
+    PathBuf::from(home.unwrap_or_default()).join(".local/share/very-normal/progress.json")
 }
 
 impl Progress {
@@ -216,6 +263,46 @@ impl Progress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_comes_out_of_the_arguments_wherever_it_is() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let home = Some(std::ffi::OsString::from("/h"));
+        let dir = PathBuf::from("/h/.local/share/very-normal/profiles/demo");
+        let (rest, p) = take_profile(args(&["--profile", "demo"]), home.clone()).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(p, Some(dir.clone()));
+        let (rest, p) = take_profile(args(&["dashboard", "--profile=demo"]), home.clone()).unwrap();
+        assert_eq!(rest, ["dashboard"]);
+        assert_eq!(p, Some(dir));
+        let (rest, p) = take_profile(args(&["stage", "2"]), home.clone()).unwrap();
+        assert_eq!((rest.len(), p), (2, None));
+        assert!(take_profile(args(&["--profile"]), home.clone()).is_err());
+        assert!(take_profile(args(&["--profile", "../x"]), home.clone()).is_err());
+        assert!(take_profile(args(&["--profile", ".hidden"]), home).is_err());
+    }
+
+    #[test]
+    fn a_profile_folder_holds_the_progress_unless_data_says_otherwise() {
+        let s = |v: &str| Some(std::ffi::OsString::from(v));
+        assert_eq!(
+            path_from(None, None, s("/h")),
+            PathBuf::from("/h/.local/share/very-normal/progress.json")
+        );
+        assert_eq!(
+            path_from(None, s("/tmp/demo"), s("/h")),
+            PathBuf::from("/tmp/demo/progress.json")
+        );
+        assert_eq!(
+            path_from(s("/x/p.json"), s("/tmp/demo"), s("/h")),
+            PathBuf::from("/x/p.json")
+        );
+        assert_eq!(
+            path_from(None, s(""), s("/h")),
+            PathBuf::from("/h/.local/share/very-normal/progress.json"),
+            "an empty variable counts as unset"
+        );
+    }
 
     const BACKUP: &str = r#"{"stage":1,"runs":[
         {"t":1794400000000,"stage":0,"mode":"real","wpm":34,"acc":96.5},

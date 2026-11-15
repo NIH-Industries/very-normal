@@ -53,9 +53,12 @@ very-normal make-plan --name "My Layout" --text ~/notes ~/Documents/emails.txt
 ```
 
 - `--from` is the layout you type on now: `qwerty` (the default), `dvorak`,
-  `colemak`, `colemak-dh`, `workman` or `norman`, or your own 30 keys written
-  top row first, like `"qwertyuiop asdfghjkl; zxcvbnm,./"`. The stages start
-  there.
+  `colemak`, `colemak-dh`, `workman` or `norman`; any plan, by its name or
+  its `.toml` file, which means the layout it ends at (`take-two:3` or
+  `plan.toml:3` for its stage 3); or your own 30 keys written top row first,
+  like `"qwertyuiop asdfghjkl; zxcvbnm,./"`. The stages start there. Since a
+  plan file is the same format `make-plan` writes, any layout you can write
+  as a plan can be a starting point.
 - `--lock` takes keys that stay where they are now. The default keeps Q, W,
   Z, X, C and V where they are, for their Cmd shortcuts, and the punctuation
   (`, . /` and `'`). Each locked key costs the layout a little, and
@@ -107,6 +110,7 @@ very-normal plan             # which plan you're on, and its stages
 very-normal make-plan        # make a layout and plan from your own typing
 very-normal use <name>       # switch plans; each keeps its own progress
 very-normal remove <name>    # delete a plan you made, with its summary and progress
+very-normal rename <name> <new name>   # give a plan you made a better name
 very-normal share [name]     # share a plan's summary (no text) on GitHub
 very-normal keymap kanata    # this stage as a kanata config (or karabiner), for any keyboard
 very-normal stage 2          # set the stage you're practising
@@ -246,6 +250,26 @@ laptop can live side by side. The kanata config includes a commented
   needs a public layout link.
 - URLs open with `open` (`xdg-open` on Linux), or `$VERY_NORMAL_OPEN` (`{url}`
   marks the address).
+
+### A separate profile
+
+`$VERY_NORMAL_HOME` keeps a whole profile in one folder: `progress.json` and
+`plan.toml` there, with made plans and charts beside them. It's a clean slate
+for trying the first run or showing someone, and your own progress is never
+touched. `$VERY_NORMAL_DATA` and `$VERY_NORMAL_PLAN` still win if they're set.
+
+```fish
+very-normal --profile demo                   # a named profile you can come back to
+very-normal --profile demo dashboard         # works with any command
+VERY_NORMAL_HOME=(mktemp -d) very-normal     # a throwaway one, anywhere
+```
+
+Named profiles live in `~/.local/share/very-normal/profiles/<name>`; delete
+the folder to start that one over.
+
+The first run's offer to build a plan from your Claude Code messages still
+reads them from `~/.claude`, so pick the built-in plan if you're showing
+someone else.
 
 ## Build
 

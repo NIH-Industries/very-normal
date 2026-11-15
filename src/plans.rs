@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::layout::{self, Plan};
+use crate::named;
 
 /// A file name for a plan's name: `Home Row Hero` is `home-row-hero`.
 pub fn slug(name: &str) -> String {
@@ -78,6 +79,52 @@ pub fn list() -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// Where you're starting from: a known layout's name, a plan (one you've
+/// made, by name, or any plan file) where it ends or at `:N` for its stage N,
+/// or your own 30 keys written top row first.
+pub fn start(s: &str) -> Result<(String, String)> {
+    if let Some((name, keys)) = named::find(s) {
+        return Ok((name.to_string(), keys.to_string()));
+    }
+    if let Some(found) = plan_start(s)? {
+        return Ok(found);
+    }
+    named::start(s).map_err(|e| {
+        anyhow::anyhow!("{e}, or a plan (a name from `very-normal plan`, or a .toml file)")
+    })
+}
+
+/// A plan's layout, when `s` names one: by file or by name, with an optional `:N` stage.
+fn plan_start(s: &str) -> Result<Option<(String, String)>> {
+    let (target, stage) = match s.rsplit_once(':') {
+        Some((p, n)) if !p.is_empty() && n.parse::<usize>().is_ok() => (p, Some(n.parse()?)),
+        _ => (s, None),
+    };
+    let plan = if Path::new(target).is_file() {
+        Plan::load(Path::new(target))?
+    } else if made_path(target).is_file() {
+        Plan::load(&made_path(target))?
+    } else if slug(target) == builtin_slug() {
+        Plan::parse(layout::EXAMPLE)?
+    } else if stage.is_some() || target.ends_with(".toml") {
+        bail!("there's no plan called {target:?}: give a plan's name or its .toml file");
+    } else {
+        return Ok(None);
+    };
+    let last = plan.stages.len().saturating_sub(1);
+    let n = stage.unwrap_or(last);
+    if n > last {
+        bail!("{} has stages 0 to {last}, not {n}", plan.name);
+    }
+    let keys = plan.stages[n].keys.clone();
+    named::check(&keys).with_context(|| format!("{}, stage {n}", plan.name))?;
+    let name = match stage {
+        Some(n) => format!("{}, stage {n}", plan.name),
+        None => plan.name.clone(),
+    };
+    Ok(Some((name, keys)))
 }
 
 /// Makes a plan the active one. Only for a fresh start: nothing to park.
@@ -164,6 +211,98 @@ fn same_stages(a: &Plan, b: &Plan) -> bool {
             .all(|(x, y)| x.keys == y.keys)
 }
 
+/// Gives a plan you made a new name: inside its file (the plan's name, stage
+/// names that use it, the header), its summary, and the file names, along with
+/// the copy you're practising and any progress kept for it.
+pub fn rename(old: &str, new: &str, progress: &Path) -> Result<String> {
+    rename_in(&dir(), &layout::plan_path(), progress, old, new)
+}
+
+fn rename_in(dir: &Path, active: &Path, progress: &Path, old: &str, new: &str) -> Result<String> {
+    let new = new.trim();
+    if new.is_empty() {
+        bail!("give the plan a name");
+    }
+    let (from, to) = (slug(old), slug(new));
+    let made = dir.join(format!("{from}.toml"));
+    if !made.exists() {
+        if from == builtin_slug() {
+            bail!("the built-in plan can't be renamed; make your own with `very-normal make-plan`");
+        }
+        bail!("no plan called {old}");
+    }
+    let plan = Plan::load(&made)?;
+    let target = dir.join(format!("{to}.toml"));
+    if to != from && (target.exists() || to == builtin_slug()) {
+        bail!("there's already a plan called {new}");
+    }
+    let is_active = active.exists() && Plan::load(active).is_ok_and(|a| slug(&a.name) == from);
+
+    let text = renamed_plan(&std::fs::read_to_string(&made)?, &plan.name, new);
+    Plan::parse(&text).context("the renamed plan doesn't load")?;
+    std::fs::write(&target, &text).with_context(|| format!("writing {}", target.display()))?;
+    if is_active {
+        std::fs::write(active, &text).with_context(|| format!("writing {}", active.display()))?;
+    }
+    let summary = summary_of(&made);
+    if summary.exists() {
+        let text = std::fs::read_to_string(&summary)?.replace(&plan.name, new);
+        std::fs::write(summary_of(&target), text)?;
+    }
+    let kept = progress
+        .with_file_name("plans")
+        .join(format!("{from}.json"));
+    if kept.exists() && to != from {
+        std::fs::rename(&kept, kept.with_file_name(format!("{to}.json")))?;
+    }
+    if to != from {
+        std::fs::remove_file(&made)?;
+        if summary.exists() {
+            std::fs::remove_file(&summary)?;
+        }
+    }
+    Ok(format!(
+        "{} is now {new}{}.",
+        plan.name,
+        if is_active {
+            ", and it's still the plan you're practising"
+        } else {
+            ""
+        }
+    ))
+}
+
+/// A plan file's text with `old` renamed to `new` in its `name = ` lines and
+/// its header comment, leaving drill words and everything else alone.
+fn renamed_plan(text: &str, old: &str, new: &str) -> String {
+    let quoted = |s: &str| toml::Value::String(s.to_string()).to_string();
+    let mut out: String = text
+        .lines()
+        .map(|line| {
+            let t = line.trim_start();
+            let is_name = t.starts_with("name") && t["name".len()..].trim_start().starts_with('=');
+            if is_name && line.contains(old) {
+                let indent = &line[..line.len() - t.len()];
+                let value = t.split_once('=').map_or("", |(_, v)| v.trim());
+                let current = toml::from_str::<toml::Table>(&format!("v = {value}"))
+                    .ok()
+                    .and_then(|v| v.get("v")?.as_str().map(String::from))
+                    .unwrap_or_default();
+                format!("{indent}name = {}", quoted(&current.replace(old, new)))
+            } else if t.starts_with('#') {
+                line.replace(&format!(" {old},"), &format!(" {new},"))
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// Deletes a plan you made, its summary, and any progress kept for it.
 pub fn remove(name: &str, progress: &Path) -> Result<String> {
     let want = slug(name);
@@ -207,5 +346,115 @@ mod tests {
         assert_eq!(slug("  Very  Normal! "), "very-normal");
         assert_eq!(slug("Mark's"), "mark-s");
         assert_eq!(slug("!!"), "plan");
+    }
+
+    #[test]
+    fn renames_a_plan_everywhere_it_goes_by_name() {
+        let root = std::env::temp_dir().join(format!("very-normal-rename-{}", std::process::id()));
+        let plans = root.join("plans");
+        std::fs::create_dir_all(&plans).unwrap();
+        let example = Plan::parse(layout::EXAMPLE).unwrap();
+        let old = "Take Two";
+        let text = format!(
+            "# A very-normal plan for {old}, made by `very-normal make-plan`\n{}",
+            layout::EXAMPLE
+                .replacen(
+                    &format!("name = \"{}\"", example.name),
+                    &format!("name = \"{old}\""),
+                    1
+                )
+                .replace(&format!("Fully {}", example.name), &format!("Fully {old}"))
+        );
+        std::fs::write(plans.join("take-two.toml"), &text).unwrap();
+        std::fs::write(
+            plans.join("take-two.md"),
+            format!("# {old}\n\"name\":\"{old}\""),
+        )
+        .unwrap();
+        let active = root.join("plan.toml");
+        std::fs::write(&active, &text).unwrap();
+        let progress = root.join("progress.json");
+        let kept = root.join("plans/take-two.json");
+        std::fs::write(&kept, "{}").unwrap();
+
+        let msg = rename_in(&plans, &active, &progress, "take two", "Home Row Glow").unwrap();
+        assert!(msg.contains("still the plan you're practising"), "{msg}");
+        let renamed = Plan::load(&plans.join("home-row-glow.toml")).unwrap();
+        assert_eq!(renamed.name, "Home Row Glow");
+        assert!(
+            renamed
+                .stages
+                .iter()
+                .any(|s| s.name == "Fully Home Row Glow"),
+            "{:?}",
+            renamed.stages.last().map(|s| &s.name)
+        );
+        assert_eq!(
+            renamed.stages[1].keys, example.stages[1].keys,
+            "drills and keys stay put"
+        );
+        assert_eq!(Plan::load(&active).unwrap().name, "Home Row Glow");
+        let summary = std::fs::read_to_string(plans.join("home-row-glow.md")).unwrap();
+        assert!(
+            summary.starts_with("# Home Row Glow") && !summary.contains(old),
+            "{summary}"
+        );
+        assert!(
+            std::fs::read_to_string(plans.join("home-row-glow.toml"))
+                .unwrap()
+                .starts_with("# A very-normal plan for Home Row Glow,")
+        );
+        assert!(root.join("plans/home-row-glow.json").exists());
+        assert!(!plans.join("take-two.toml").exists() && !kept.exists());
+
+        assert!(
+            rename_in(&plans, &active, &progress, "take two", "x").is_err(),
+            "it's gone"
+        );
+        std::fs::write(
+            plans.join("other.toml"),
+            layout::EXAMPLE.replacen(
+                &format!("name = \"{}\"", example.name),
+                "name = \"Other\"",
+                1,
+            ),
+        )
+        .unwrap();
+        let err = rename_in(&plans, &active, &progress, "other", "home row glow").unwrap_err();
+        assert!(err.to_string().contains("already a plan"), "{err}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn starts_from_a_known_layout_a_plan_file_or_your_own_keys() {
+        let example = Plan::parse(layout::EXAMPLE).unwrap();
+        let file =
+            std::env::temp_dir().join(format!("very-normal-from-{}.toml", std::process::id()));
+        std::fs::write(&file, layout::EXAMPLE).unwrap();
+        let f = file.display().to_string();
+
+        let (name, keys) = start(&f).unwrap();
+        assert_eq!(name, example.name, "a plan means where it ends");
+        assert_eq!(keys, example.stages.last().unwrap().keys);
+
+        let (name, keys) = start(&format!("{f}:1")).unwrap();
+        assert_eq!(name, format!("{}, stage 1", example.name));
+        assert_eq!(keys, example.stages[1].keys);
+
+        assert!(
+            start(&format!("{f}:99"))
+                .unwrap_err()
+                .to_string()
+                .contains("stages 0 to")
+        );
+        assert!(start("/nowhere/at/all.toml").is_err());
+        assert_eq!(start("dvorak").unwrap().0, "Dvorak");
+        assert_eq!(
+            start("qwertyuiop asdfghjkl; zxcvbnm,./").unwrap().1,
+            named::QWERTY
+        );
+        let err = start("azerty-ish").unwrap_err().to_string();
+        assert!(err.contains("a plan"), "{err}");
+        std::fs::remove_file(file).ok();
     }
 }

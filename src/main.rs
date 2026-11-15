@@ -26,6 +26,8 @@ usage: very-normal                  a guided session: layout, warm-up, practice
                                     (very-normal make-plan --help for its options)
        very-normal use <name>       switch plans; each plan keeps its own progress
        very-normal remove <name>    delete a plan you made, its summary and its progress
+       very-normal rename <name> <new name>
+                                    give a plan you made a better name
        very-normal share [name]     share a plan's summary (no text) on GitHub
        very-normal keymap kanata|karabiner [stage] [--all-keyboards]
                                     a software keymap for keyboards without Oryx
@@ -36,7 +38,10 @@ usage: very-normal                  a guided session: layout, warm-up, practice
        very-normal --help | --version
 
 Progress lives in ~/.local/share/very-normal/progress.json ($VERY_NORMAL_DATA).
-Plans live in ~/.config/very-normal ($VERY_NORMAL_PLAN). The Oryx layout comes
+Plans live in ~/.config/very-normal ($VERY_NORMAL_PLAN). $VERY_NORMAL_HOME=<dir>
+keeps both in one folder: a separate profile, to try the first run or show
+someone. --profile <name> (before or after any command) does the same with a
+named folder in ~/.local/share/very-normal/profiles. The Oryx layout comes
 from your plan ($VERY_NORMAL_LAYOUT); URLs open with `open`, or `xdg-open` on
 Linux ($VERY_NORMAL_OPEN, where {url} marks the address). `m` plays SomaFM's
 Drone Zone with mpv or ffplay ($VERY_NORMAL_MUSIC: any stream URL or file).
@@ -49,7 +54,14 @@ fn main() -> Result<()> {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (args, profile) =
+        store::take_profile(std::env::args().skip(1).collect(), std::env::var_os("HOME"))?;
+    if let Some(dir) = profile {
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("making the profile folder {}", dir.display()))?;
+        // SAFETY: still single-threaded, and nothing has read the environment yet
+        unsafe { std::env::set_var("VERY_NORMAL_HOME", &dir) };
+    }
     let path = store::default_path();
     if args.is_empty()
         && !layout::plan_path().exists()
@@ -164,6 +176,9 @@ fn main() -> Result<()> {
         }
         ["use", name] => println!("{}", plans::switch(name, &path)?),
         ["remove", name] => println!("{}", plans::remove(name, &path)?),
+        ["rename", old, new @ ..] if !new.is_empty() => {
+            println!("{}", plans::rename(old, &new.join(" "), &path)?)
+        }
         ["make-plan", "-h" | "--help"] => print!("{}", optimise::USAGE),
         ["make-plan", rest @ ..] => {
             let made = optimise::make(&Options::parse(rest)?)?;
@@ -299,7 +314,8 @@ fn ask_start() -> Result<String> {
     for (i, name) in named::STARTS.iter().enumerate() {
         println!("  {}  {name}", i + 1);
     }
-    println!("  or type your own 30 keys, top row first, like qwertyuiop asdfghjkl; zxcvbnm,./\n");
+    println!("  or type your own 30 keys, top row first, like qwertyuiop asdfghjkl; zxcvbnm,./");
+    println!("  or a plan's name or .toml file, for where it ends (add :N for its stage N)\n");
     loop {
         let answer = ask("Layout [1]: ")?;
         let pick = match answer.as_str() {
@@ -312,7 +328,7 @@ fn ask_start() -> Result<String> {
             }
             other => other.to_string(),
         };
-        match named::start(&pick) {
+        match plans::start(&pick) {
             Ok((name, keys)) => {
                 println!("\n{}\n", optimise::pretty(&keys));
                 println!("Starting from {name}.");

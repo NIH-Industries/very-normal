@@ -98,8 +98,9 @@ By default it reads what you typed to Claude Code (never Claude's replies).
 for stdin. --no-claude leaves your Claude Code messages out.
 
 --from         the layout you type on now: QWERTY (the default), Dvorak, Colemak,
-               Colemak-DH, Workman or Norman, or your own 30 keys written top
-               row first, like 'qwertyuiop asdfghjkl; zxcvbnm,./'
+               Colemak-DH, Workman or Norman; a plan, by name or .toml file,
+               where it ends (or name:N for its stage N); or your own 30 keys
+               written top row first, like 'qwertyuiop asdfghjkl; zxcvbnm,./'
 --lock         keys that stay where they are now (default: Q, W, Z, X, C and V for
                their Cmd shortcuts, and , . / '). Each one costs the layout a
                little; --lock '' locks nothing.
@@ -166,7 +167,7 @@ impl Options {
         if !o.claude && o.text.is_empty() {
             bail!("--no-claude leaves nothing to read; add --text with some of your writing");
         }
-        named::start(&o.from)?;
+        crate::plans::start(&o.from)?;
         if o.per_stage == 0 || o.restarts == 0 || o.iters == 0 {
             bail!("--per-stage, --restarts and --iters must be at least 1");
         }
@@ -741,7 +742,7 @@ pub fn gather(o: &Options) -> Result<(Vec<String>, Vec<&'static str>)> {
 
 /// Makes a plan and its summary, and writes both. Progress goes to stderr.
 pub fn make(o: &Options) -> Result<Made> {
-    let (start_name, start) = named::start(&o.from)?;
+    let (start_name, start) = crate::plans::start(&o.from)?;
     let lock = o
         .lock
         .clone()
