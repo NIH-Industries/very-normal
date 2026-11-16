@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-11-16
+
 - `rename <plan> <new name>` gives a plan you made a better name: in the plan, its stage names, its summary, its files and any progress kept for it, even while you're practising it.
 - `make-plan --from` (and the first run's question) also takes a plan, by name or `.toml` file: where it ends, or `name@N` for its stage N. Any layout written as a plan can be a starting point.
 - `--profile <name>` and `VERY_NORMAL_HOME=<dir>` keep a whole separate profile (progress, plan, made plans, charts) in one folder, for trying the first run or showing someone without touching your own progress. Named profiles live in `~/.local/share/very-normal/profiles/`.
