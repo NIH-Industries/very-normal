@@ -21,6 +21,8 @@ use crate::{coach, oryx, report};
 
 const PINK: Color = Color::Magenta;
 const TEAL: Color = Color::Cyan;
+/// A missed key: a soft lavender grey, a nudge rather than an alarm.
+const MISS: Color = Color::Indexed(146);
 /// Restarts this close together suggest frustration.
 const ABANDON_WINDOW: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
@@ -41,7 +43,8 @@ pub enum Phase {
 
 /// Seconds of drill time in a guided practice block.
 pub const BLOCK_SECS: f64 = 600.0;
-/// Two runs in a row under this accuracy end a practice block early.
+/// A run under this accuracy gets a short breather after it. Two in a row
+/// ease the block off to key recall, and two more after that end it early.
 pub const BLOCK_ACCURACY: f64 = 95.0;
 /// How long keys are ignored after a drill ends, so the letters you were still
 /// typing when the clock ran out don't land on whatever screen comes next and
@@ -58,6 +61,47 @@ pub fn practice_mode(i: usize) -> Mode {
     }
 }
 
+/// A pause between drills, with something to do with your hands. Enter skips it.
+#[derive(Debug, Clone, Copy)]
+struct Rest {
+    until: Instant,
+    cue: &'static str,
+}
+
+impl Rest {
+    /// After a run under [`BLOCK_ACCURACY`].
+    fn rough(now: Instant) -> Rest {
+        Rest {
+            until: now + Duration::from_secs(20),
+            cue: "Breathe out long and slow, and let your hands go soft.",
+        }
+    }
+
+    /// Once the block passes five minutes.
+    fn halfway(now: Instant) -> Rest {
+        Rest {
+            until: now + Duration::from_secs(30),
+            cue: "Halfway. Shake your hands out and roll your shoulders back.",
+        }
+    }
+
+    /// When two rough runs in a row ease the block off.
+    fn ease(now: Instant) -> Rest {
+        Rest {
+            until: now + Duration::from_secs(45),
+            cue: "Hands in your lap. Breathe in for 4, out for 6.",
+        }
+    }
+
+    /// The seconds left, rounded up; 0 once it's over.
+    fn left(&self, now: Instant) -> u64 {
+        self.until
+            .saturating_duration_since(now)
+            .as_secs_f64()
+            .ceil() as u64
+    }
+}
+
 /// The runs of the practice block under way: their durations and accuracies.
 #[derive(Debug, Default)]
 struct PracticeBlock {
@@ -67,6 +111,8 @@ struct PracticeBlock {
     carried_runs: usize,
     /// Runs since it started or was picked up.
     runs: Vec<(f64, f64)>,
+    /// How many runs there were when two rough ones eased it off to key recall.
+    eased_at: Option<usize>,
 }
 
 impl PracticeBlock {
@@ -109,6 +155,8 @@ pub struct App {
     abandons: Vec<Instant>,
     /// Keys before this are ignored: a drill just ended under your fingers.
     settle_until: Option<Instant>,
+    /// The breather between drills, while it's on screen.
+    rest: Option<Rest>,
     /// The help screen is open over whatever's showing.
     help: bool,
     /// How far the help screen is scrolled, and the most it can be at the last draw.
@@ -201,6 +249,7 @@ impl App {
             music: Music::default(),
             abandons: Vec::new(),
             settle_until: None,
+            rest: None,
             help: false,
             help_scroll: 0,
             help_max_scroll: std::cell::Cell::new(0),
@@ -334,6 +383,7 @@ impl App {
 
     fn end_practice(&mut self, message: String, now: Instant) {
         let block = self.block.take();
+        self.rest = None;
         self.phase = Phase::Dashboard;
         if let Some(b) = block.filter(|b| b.count() > 0) {
             self.phase = Phase::Report;
@@ -343,14 +393,23 @@ impl App {
         self.new_drill(now);
     }
 
-    /// After a run in a practice block: the next drill, or the end of the block.
+    /// After a run in a practice block: the next drill, a breather, or the end of the block.
     fn practice_next(&mut self, secs: f64, wpm: f64, acc: f64, now: Instant) {
         let Some(block) = &mut self.block else {
             return;
         };
+        let before = block.secs();
         block.runs.push((secs, acc));
-        let low: Vec<f64> = block.runs.iter().rev().take(2).map(|(_, a)| *a).collect();
-        if low.len() == 2 && low.iter().all(|a| *a < BLOCK_ACCURACY) {
+        let since = block.eased_at.unwrap_or(0);
+        let low: Vec<f64> = block.runs[since..]
+            .iter()
+            .rev()
+            .take(2)
+            .map(|(_, a)| *a)
+            .collect();
+        let two_low = low.len() == 2 && low.iter().all(|a| *a < BLOCK_ACCURACY);
+        let (eased, after, count) = (block.eased_at.is_some(), block.secs(), block.count());
+        if two_low && eased {
             return self.end_practice(
                 format!(
                     "{:.1}% and then {:.1}%. That's the sign to stop for now. No rush: it'll come together after a rest.",
@@ -359,16 +418,39 @@ impl App {
                 now,
             );
         }
-        if block.secs() >= BLOCK_SECS {
+        if after >= BLOCK_SECS {
             return self.end_practice(
                 "That's ten minutes. Practice done for this session; let it settle.".into(),
                 now,
             );
         }
-        self.mode = practice_mode(block.count());
+        if two_low {
+            block.eased_at = Some(block.runs.len());
+            self.mode = Mode::Recall;
+            self.new_drill(now);
+            self.rest = Some(Rest::ease(now));
+            self.message = Some((
+                format!(
+                    "{:.1}% and then {:.1}%. Let's go easy: next is key recall, one key at a time, as slow as you like.",
+                    low[1], low[0]
+                ),
+                true,
+            ));
+            return;
+        }
+        let half = BLOCK_SECS / 2.0;
+        if before < half && after >= half {
+            self.rest = Some(Rest::halfway(now));
+        }
+        self.mode = practice_mode(count);
         self.new_drill(now);
+        let result = format!("{wpm:.0} WPM · {acc:.1}% accuracy.");
         self.message = Some((
-            format!("{wpm:.0} WPM · {acc:.1}% accuracy. Press enter for the next drill."),
+            if self.rest.is_some() {
+                result
+            } else {
+                format!("{result} Press enter for the next drill.")
+            },
             true,
         ));
     }
@@ -452,6 +534,7 @@ impl App {
             format!("{wpm:.0} WPM · {acc:.1}% accuracy. {verdict}{record}"),
             good,
         ));
+        self.rest = (acc < BLOCK_ACCURACY).then(|| Rest::rough(now));
         if self.phase == Phase::Practice {
             let secs = (self.drill.elapsed(now).as_secs_f64() * 10.0).round() / 10.0;
             self.practice_next(secs, wpm, acc, now);
@@ -578,12 +661,14 @@ impl App {
                     if self.drill.done || self.drill.started() {
                         self.new_drill(now);
                     }
+                    self.rest = None;
                     self.message = None;
                     self.drill.touch(now);
                     self.typing = true;
                 }
                 KeyCode::Esc if self.block.is_none() => {
                     self.phase = Phase::Dashboard;
+                    self.rest = None;
                     self.message = None;
                 }
                 KeyCode::Esc => {
@@ -686,7 +771,7 @@ impl App {
         para(
             &mut lines,
             &format!(
-                "The clock counts typing time only, so it moves between drills, not while you rest. Practice ends after the drill that passes 10:00, or after two runs in a row under {BLOCK_ACCURACY:.0}%. Quit before 10:00 and the next practice today picks up where you left off."
+                "The clock counts typing time only, so it moves between drills, not while you rest. A run under {BLOCK_ACCURACY:.0}% gets a short breather after it, and so does the halfway mark; enter skips either. Two runs in a row under {BLOCK_ACCURACY:.0}% ease off to key recall with a longer one, and two more after that end practice for now. Otherwise it ends after the drill that passes 10:00. Quit before 10:00 and the next practice today picks up where you left off."
             ),
         );
         lines.push(head(format!("The drills, at stage {stage}")));
@@ -985,6 +1070,15 @@ impl App {
             }
             _ if !self.typing => lines.push(Line::styled("Press enter to start.", dim())),
             _ => {}
+        }
+        if let Some(rest) = self.rest.filter(|_| !self.typing) {
+            let left = rest.left(now);
+            let line = if left > 0 {
+                format!("{}  {}:{:02} · enter skips", rest.cue, left / 60, left % 60)
+            } else {
+                "Ready when you are. Press enter to go on.".into()
+            };
+            lines.push(Line::styled(line, Style::new().fg(TEAL)));
         }
         let border = if self.typing {
             Style::new().fg(PINK)
@@ -1414,7 +1508,7 @@ impl App {
             let style = if d.error {
                 Style::new()
                     .fg(Color::Black)
-                    .bg(Color::LightRed)
+                    .bg(MISS)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::new()
@@ -1441,7 +1535,7 @@ impl App {
             } else if i == d.pos {
                 let base = Style::new().add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
                 if d.error {
-                    base.bg(Color::LightRed).fg(Color::Black)
+                    base.bg(MISS).fg(Color::Black)
                 } else {
                     base.fg(PINK)
                 }
@@ -1792,8 +1886,12 @@ mod guided_tests {
     }
 
     fn draw(app: &App) -> Buffer {
+        draw_at(app, Instant::now())
+    }
+
+    fn draw_at(app: &App, now: Instant) -> Buffer {
         let mut t = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        t.draw(|f| app.render(f, Instant::now())).unwrap();
+        t.draw(|f| app.render(f, now)).unwrap();
         t.backend().buffer().clone()
     }
 
@@ -2043,11 +2141,17 @@ mod guided_tests {
     fn keys_still_flying_when_a_drill_ends_dont_stop_the_music_or_quit() {
         let mut app = practising("settle");
         let now = Instant::now();
-        app.practice_next(60.0, 12.0, 90.0, now);
+        for _ in 0..3 {
+            app.practice_next(60.0, 12.0, 90.0, now);
+        }
         app.handle_key(key(KeyCode::Enter), now);
         app.handle_key(key(KeyCode::Char('~')), now);
         app.finish(now);
-        assert_eq!(app.phase, Phase::Report, "two sloppy runs end the block");
+        assert_eq!(
+            app.phase,
+            Phase::Report,
+            "two sloppy runs after easing off end the block"
+        );
         for c in ['m', 'q', 'x'] {
             app.handle_key(key(KeyCode::Char(c)), now + SETTLE / 2);
         }
@@ -2058,7 +2162,7 @@ mod guided_tests {
     }
 
     #[test]
-    fn two_sloppy_runs_in_a_row_end_it_early() {
+    fn two_sloppy_runs_ease_off_to_key_recall_and_two_more_end_it() {
         let mut app = practising("sloppy");
         let now = Instant::now();
         app.practice_next(60.0, 12.0, 94.0, now);
@@ -2066,10 +2170,78 @@ mod guided_tests {
         app.practice_next(60.0, 12.0, 93.5, now);
         assert_eq!(app.phase, Phase::Practice);
         app.practice_next(60.0, 12.0, 92.0, now);
+        assert_eq!(app.phase, Phase::Practice, "the first two ease off instead");
+        assert_eq!(app.mode, Mode::Recall);
+        let msg = &app.message.as_ref().unwrap().0;
+        assert!(
+            msg.contains("93.5%") && msg.contains("92.0%") && msg.contains("key recall"),
+            "{msg}"
+        );
+        assert!(app.rest.is_some_and(|r| r.left(now) == 45));
+        app.practice_next(20.0, 12.0, 90.0, now);
+        assert_eq!(
+            app.phase,
+            Phase::Practice,
+            "one rough run after easing isn't two"
+        );
+        app.practice_next(20.0, 12.0, 91.0, now);
         assert_eq!(app.phase, Phase::Report);
         let msg = &app.message.as_ref().unwrap().0;
-        assert!(msg.contains("93.5%") && msg.contains("92.0%"), "{msg}");
+        assert!(msg.contains("90.0%") && msg.contains("91.0%"), "{msg}");
         assert!(msg.contains("No rush") && !msg.contains("Go"), "{msg}");
+    }
+
+    #[test]
+    fn a_rough_run_gets_a_breather_that_enter_skips() {
+        let mut app = practising("rough");
+        let now = Instant::now();
+        app.handle_key(key(KeyCode::Enter), now);
+        let typed: String = app.drill.text.iter().collect();
+        for c in typed.chars() {
+            // a miss on every key: well under 95%
+            app.handle_key(key(KeyCode::Char('~')), now);
+            app.handle_key(key(KeyCode::Char(c)), now);
+        }
+        assert!(!app.typing);
+        let rest = app.rest.expect("a breather after a rough run");
+        assert!(rest.cue.contains("Breathe"));
+        let later = now + SETTLE;
+        let screen = text(&draw_at(&app, later));
+        assert!(screen.contains("enter skips"), "{screen}");
+        let screen = text(&draw_at(&app, later + Duration::from_secs(30)));
+        assert!(screen.contains("Ready when you are"), "{screen}");
+        app.handle_key(key(KeyCode::Enter), later);
+        assert!(app.typing && app.rest.is_none());
+    }
+
+    #[test]
+    fn a_clean_run_has_no_breather_but_halfway_does() {
+        let mut app = practising("halfway");
+        let now = Instant::now();
+        app.practice_next(60.0, 12.0, 98.0, now);
+        assert!(app.rest.is_none());
+        app.practice_next(200.0, 12.0, 98.0, now);
+        assert!(app.rest.is_none(), "4:20 isn't halfway");
+        app.practice_next(60.0, 12.0, 98.0, now);
+        assert!(app.rest.is_some_and(|r| r.cue.contains("Halfway")));
+        assert!(!app.message.as_ref().unwrap().0.contains("Press enter"));
+    }
+
+    #[test]
+    fn a_miss_is_soft_not_red() {
+        let mut app = practising("soft");
+        let now = Instant::now();
+        app.handle_key(key(KeyCode::Enter), now);
+        app.handle_key(key(KeyCode::Char('~')), now);
+        assert!(app.drill.error);
+        let b = draw(&app);
+        assert!(
+            b.content()
+                .iter()
+                .all(|c| c.bg != Color::LightRed && c.bg != Color::Red),
+            "no red on a miss"
+        );
+        assert!(b.content().iter().any(|c| c.bg == MISS));
     }
 
     #[test]

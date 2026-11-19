@@ -135,10 +135,14 @@ A guided session has four steps, one screen each:
 2. **Warm-up**: a minute of slow breathing and hand stretches.
 3. **Practice**: ten minutes of drills picked for you, real text first while
    you're fresh, then new keys and review, with the keyboard shown the whole
-   time. The clock counts typing time only and moves between drills. Two runs
-   in a row under 95% end it early: that's the time to rest. If you quit
-   before 10:00, the next practice today picks up where you left off; once a
-   session reaches 10:00, the next one starts at 0:00, and so does tomorrow's.
+   time. The clock counts typing time only and moves between drills. A miss
+   shows in soft lavender, not red. A run under 95% gets a 20-second
+   breather after it, and the halfway mark a 30-second stretch; `enter`
+   skips either. Two runs in a row under 95% ease off to key recall, one key
+   at a time, after a longer breather. Two more after that end practice:
+   that's the time to rest. If you quit before 10:00, the next practice today
+   picks up where you left off; once a session reaches 10:00, the next one
+   starts at 0:00, and so does tomorrow's.
 4. **Report**: this session against your last few, your slowest keys, what's
    left before the next stage, and roughly how many sessions the real-text
    trend says it'll take. There's no rush.
