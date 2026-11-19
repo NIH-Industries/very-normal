@@ -5,6 +5,9 @@
 - A missed key shows in a soft lavender instead of red: a nudge, not an alarm.
 - Breathers between drills: 20 seconds to breathe out and soften your hands after a run under 95%, and 30 seconds to shake out at the halfway mark. `enter` skips them.
 - Two runs in a row under 95% no longer end practice straight away. The block eases off to key recall, one key at a time, after a 45-second breather, and only two more rough runs after that end it.
+- Your hard keys are judged on your last 12 runs of the stage (about two sessions), not every run ever, so a key you've since learned stops getting extra reps and one that's started tripping you up gets them soon.
+- Words with your hard keys are spread out in new keys and review: never two in a row (three at most when they're most of the words), so misses don't pile up.
+- Straight after a run under 95%, the next drill doesn't lean on your hard keys at all: easy wins while you settle. Real text is never weighted.
 
 ## 0.5.0 - 2026-11-16
 

@@ -68,7 +68,7 @@ impl Mode {
         match self {
             Mode::Recall if stage == 0 => "Single home-row keys. Pick a stage to drill its moved keys.".into(),
             Mode::Recall => format!(
-                "One key at a time from this stage's moves: {}. Keys you miss or hesitate on come back more often.",
+                "One key at a time from this stage's moves: {}. Keys you've missed or hesitated on lately come back more often.",
                 layout::focus(stage).iter().map(char::to_string).collect::<Vec<_>>().join(" ")
             ),
             Mode::Words if stage == 0 => "Common words from your own typing.".into(),
@@ -152,12 +152,42 @@ fn stage_words(stage: usize) -> Vec<String> {
 /// How much more often a word with your worst key comes up than one without.
 pub const LEAN: f64 = 3.0;
 
-/// Keys that need more work than the stage's middle key: slower, or missed
-/// more, scored from just above the middle (near 0) to the worst (1). Keys
-/// pressed fewer than five times aren't judged yet.
+/// How far back a key's speed and misses count: about two sessions of this
+/// stage, so a key you've since learned stops getting extra reps, and one
+/// that's started tripping you up gets them soon.
+pub const RECENT_RUNS: usize = 12;
+
+/// A key at least this far from the middle to the worst counts as a hard one:
+/// the drill leans on it, and its words are spread out.
+const HARD: f64 = 0.3;
+
+/// Each key's speed and misses over this stage's last [`RECENT_RUNS`] runs,
+/// or over every run when none of those kept their per-key timings.
+pub fn recent_letters(stage: usize, progress: &Progress) -> BTreeMap<String, LetterStat> {
+    let mut out: BTreeMap<String, LetterStat> = BTreeMap::new();
+    for run in progress
+        .runs
+        .iter()
+        .rev()
+        .filter(|r| r.stage == stage && !r.letters.is_empty())
+        .take(RECENT_RUNS)
+    {
+        for (ch, stat) in &run.letters {
+            out.entry(ch.clone()).or_default().add(stat);
+        }
+    }
+    if out.is_empty() {
+        progress.letters(stage)
+    } else {
+        out
+    }
+}
+
+/// Keys that need more work than the stage's middle key lately: slower, or
+/// missed more, scored from just above the middle (near 0) to the worst (1).
+/// Keys pressed fewer than five times aren't judged yet.
 pub fn trouble(stage: usize, progress: &Progress) -> BTreeMap<char, f64> {
-    let scores: Vec<(char, f64)> = progress
-        .letters(stage)
+    let scores: Vec<(char, f64)> = recent_letters(stage, progress)
         .iter()
         .filter_map(|(c, s)| {
             let ch = c.chars().next().filter(|ch| *ch != ' ')?;
@@ -185,58 +215,76 @@ pub fn trouble(stage: usize, progress: &Progress) -> BTreeMap<char, f64> {
 }
 
 /// The keys a words drill leans on, worst first: at most three, and only
-/// ones clearly behind the rest.
-pub fn leaning(mode: Mode, stage: usize, progress: &Progress) -> Vec<char> {
-    if !matches!(mode, Mode::Words | Mode::Review) {
+/// ones clearly behind the rest. None when it's going gently.
+pub fn leaning(mode: Mode, stage: usize, progress: &Progress, gentle: bool) -> Vec<char> {
+    if gentle || !matches!(mode, Mode::Words | Mode::Review) {
         return Vec::new();
     }
     let mut keys: Vec<(char, f64)> = trouble(stage, progress)
         .into_iter()
-        .filter(|(_, t)| *t >= 0.3)
+        .filter(|(_, t)| *t >= HARD)
         .collect();
     keys.sort_by(|a, b| b.1.total_cmp(&a.1));
     keys.into_iter().take(3).map(|(c, _)| c).collect()
 }
 
 /// Words with troublesome keys come up more often, up to `LEAN` times, so
-/// they get extra reps without the whole drill turning into them.
+/// they get extra reps without the whole drill turning into them. Hard words
+/// are spread out: never two in a row, or three when they're most of the pool,
+/// so the misses don't pile up.
 fn words_from(pool: &[String], n: usize, trouble: &BTreeMap<char, f64>, rng: &mut Rng) -> String {
-    let weights: Vec<f64> = pool
+    let worst: Vec<f64> = pool
         .iter()
         .map(|w| {
-            let worst = w
-                .chars()
+            w.chars()
                 .filter_map(|c| trouble.get(&c))
-                .fold(0.0, |a: f64, t| a.max(*t));
-            1.0 + (LEAN - 1.0) * worst
+                .fold(0.0, |a: f64, t| a.max(*t))
         })
         .collect();
-    let total: f64 = weights.iter().sum();
-    (0..n)
-        .map(|_| {
-            let mut t = total * rng.unit();
-            for (w, weight) in pool.iter().zip(&weights) {
-                t -= weight;
-                if t <= 0.0 {
-                    return w.as_str();
-                }
+    let weights: Vec<f64> = worst.iter().map(|t| 1.0 + (LEAN - 1.0) * t).collect();
+    let hard: Vec<bool> = worst.iter().map(|t| *t >= HARD).collect();
+    let hard_count = hard.iter().filter(|h| **h).count();
+    let easy_count = pool.len() - hard_count;
+    let max_run = if easy_count >= hard_count { 1 } else { 2 };
+    let pick = |rng: &mut Rng, easy_only: bool| -> usize {
+        let allowed = |i: usize| !(easy_only && hard[i]);
+        let total: f64 = (0..pool.len())
+            .filter(|i| allowed(*i))
+            .map(|i| weights[i])
+            .sum();
+        let mut t = total * rng.unit();
+        let mut last = 0;
+        for i in (0..pool.len()).filter(|i| allowed(*i)) {
+            last = i;
+            t -= weights[i];
+            if t <= 0.0 {
+                return i;
             }
-            pool[pool.len() - 1].as_str()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+        }
+        last
+    };
+    let mut run = 0;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let i = pick(rng, easy_count > 0 && run >= max_run);
+        run = if hard[i] { run + 1 } else { 0 };
+        out.push(pool[i].as_str());
+    }
+    out.join(" ")
 }
 
-/// Keys you miss or are slow on get picked more often.
-fn weighted_char(stage: usize, progress: &Progress, rng: &mut Rng) -> char {
+/// Keys you've missed or been slow on lately get picked more often, unless
+/// it's going gently, when every key comes up as often.
+fn weighted_char(stage: usize, progress: &Progress, gentle: bool, rng: &mut Rng) -> char {
     let mut focus = layout::focus(stage);
     if focus.is_empty() {
         focus = "asdfjkl;".chars().collect();
     }
-    let stats = progress.letters(stage);
+    let stats = recent_letters(stage, progress);
     let weights: Vec<f64> = focus
         .iter()
         .map(|c| match stats.get(&c.to_string()) {
+            _ if gentle => 1.0,
             Some(s) if s.n > 0 => {
                 1.0 + 12.0 * (s.miss as f64 / s.n as f64) + s.ms / s.n as f64 / 350.0
             }
@@ -253,15 +301,22 @@ fn weighted_char(stage: usize, progress: &Progress, rng: &mut Rng) -> char {
     focus[0]
 }
 
-pub fn build(mode: Mode, stage: usize, progress: &Progress, rng: &mut Rng) -> String {
+/// A drill's text. `gentle` (after a rough run) drops the extra reps on hard
+/// keys, so the next drill is easy wins; real text is never weighted.
+pub fn build(mode: Mode, stage: usize, progress: &Progress, gentle: bool, rng: &mut Rng) -> String {
     let common = layout::common_words();
+    let trouble = if gentle {
+        BTreeMap::new()
+    } else {
+        trouble(stage, progress)
+    };
     match mode {
         Mode::Recall => {
             let several = layout::focus(stage).len() > 1;
             let mut out = String::new();
             let mut prev = None;
             while out.chars().count() < 40 {
-                let c = weighted_char(stage, progress, rng);
+                let c = weighted_char(stage, progress, gentle, rng);
                 if several && Some(c) == prev {
                     continue;
                 }
@@ -270,14 +325,14 @@ pub fn build(mode: Mode, stage: usize, progress: &Progress, rng: &mut Rng) -> St
             }
             out
         }
-        Mode::Words => words_from(&stage_words(stage), 30, &trouble(stage, progress), rng),
+        Mode::Words => words_from(&stage_words(stage), 30, &trouble, rng),
         Mode::Review => {
             let pool: Vec<String> = if stage < 2 {
                 stage_words(stage)
             } else {
                 (1..=stage).flat_map(stage_words).collect()
             };
-            words_from(&pool, 30, &trouble(stage, progress), rng)
+            words_from(&pool, 30, &trouble, rng)
         }
         Mode::Real => (0..260)
             .map(|_| common[(rng.unit().powf(2.2) * common.len() as f64) as usize].as_str())
@@ -558,7 +613,7 @@ mod tests {
     #[test]
     fn recall_only_uses_the_stage_keys() {
         let mut rng = Rng::seeded(42);
-        let text = build(Mode::Recall, 3, &Progress::default(), &mut rng);
+        let text = build(Mode::Recall, 3, &Progress::default(), false, &mut rng);
         let focus = layout::focus(3);
         assert_eq!(text.chars().count(), 40);
         assert!(text.chars().all(|c| focus.contains(&c)));
@@ -595,19 +650,84 @@ mod tests {
         assert_eq!(t[&'k'], 1.0);
         assert!(t[&'i'] > 0.4 && t[&'i'] < 1.0, "{t:?}");
         assert!(!t.contains_key(&'a') && !t.contains_key(&'z'));
-        assert_eq!(leaning(Mode::Words, 1, &p), vec!['k', 'i']);
-        assert!(leaning(Mode::Real, 1, &p).is_empty());
+        assert_eq!(leaning(Mode::Words, 1, &p, false), vec!['k', 'i']);
+        assert!(leaning(Mode::Words, 1, &p, true).is_empty(), "gently");
+        assert!(leaning(Mode::Real, 1, &p, false).is_empty());
         assert!(trouble(2, &p).is_empty());
     }
 
     #[test]
-    fn words_with_the_worst_key_come_up_about_three_times_as_often() {
-        let pool = vec!["ok".to_string(), "no".to_string()];
+    fn words_with_the_worst_key_come_up_more_often_but_never_twice_in_a_row() {
+        let pool: Vec<String> = ["ok", "no", "an", "so"].map(String::from).into();
         let t = BTreeMap::from([('k', 1.0)]);
-        let text = words_from(&pool, 4000, &t, &mut Rng::seeded(3));
-        let ok = text.split(' ').filter(|w| *w == "ok").count() as f64;
-        let share = ok / 4000.0;
-        assert!((share - 0.75).abs() < 0.03, "{share}");
+        let text = words_from(&pool, 6000, &t, &mut Rng::seeded(3));
+        let words: Vec<&str> = text.split(' ').collect();
+        assert!(words.windows(2).all(|w| w != ["ok", "ok"]), "spread out");
+        // half the picks after an easy word, none straight after itself: a third
+        let share = words.iter().filter(|w| **w == "ok").count() as f64 / 6000.0;
+        assert!((share - 1.0 / 3.0).abs() < 0.03, "{share}");
+        let plain = words_from(&pool, 6000, &BTreeMap::new(), &mut Rng::seeded(3));
+        let share = plain.split(' ').filter(|w| *w == "ok").count() as f64 / 6000.0;
+        assert!((share - 0.25).abs() < 0.03, "no lean: {share}");
+    }
+
+    #[test]
+    fn hard_words_come_two_at_most_when_theyre_most_of_the_pool() {
+        let pool: Vec<String> = ["ok", "kin", "no"].map(String::from).into();
+        let t = BTreeMap::from([('k', 1.0)]);
+        let text = words_from(&pool, 3000, &t, &mut Rng::seeded(5));
+        let words: Vec<&str> = text.split(' ').collect();
+        assert!(words.windows(3).all(|w| w.contains(&"no")));
+        assert!(words.windows(2).any(|w| w.iter().all(|w| *w != "no")));
+    }
+
+    #[test]
+    fn trouble_follows_recent_runs_not_the_whole_stage() {
+        let mut p = with_letters(&[
+            ('a', 20, 0, 250.0),
+            ('b', 20, 0, 260.0),
+            ('c', 20, 0, 270.0),
+            ('k', 200, 0, 2000.0),
+        ]);
+        assert!(
+            trouble(1, &p).contains_key(&'k'),
+            "all-time until runs have timings"
+        );
+        let stat = |ms: f64| LetterStat {
+            n: 10,
+            miss: 0,
+            ms: ms * 10.0,
+        };
+        p.runs.push(crate::store::Run {
+            stage: 1,
+            letters: BTreeMap::from([
+                ("a".to_string(), stat(250.0)),
+                ("b".to_string(), stat(260.0)),
+                ("c".to_string(), stat(900.0)),
+                ("k".to_string(), stat(255.0)),
+            ]),
+            ..Default::default()
+        });
+        let t = trouble(1, &p);
+        assert!(!t.contains_key(&'k'), "learned since: {t:?}");
+        assert_eq!(t.get(&'c'), Some(&1.0), "newly slow: {t:?}");
+    }
+
+    #[test]
+    fn recall_goes_evenly_when_gentle() {
+        let p = with_letters(&[('a', 20, 0, 250.0)]);
+        let focus = layout::focus(1);
+        let mut rng = Rng::seeded(9);
+        let picks: Vec<char> = (0..4000)
+            .map(|_| weighted_char(1, &p, true, &mut rng))
+            .collect();
+        for c in &focus {
+            let share = picks.iter().filter(|p| *p == c).count() as f64 / 4000.0;
+            assert!(
+                (share - 1.0 / focus.len() as f64).abs() < 0.04,
+                "{c}: {share}"
+            );
+        }
     }
 
     #[test]
@@ -615,7 +735,7 @@ mod tests {
         let mut rng = Rng::seeded(7);
         for stage in 0..=layout::last() {
             for mode in Mode::ALL {
-                assert!(!build(mode, stage, &Progress::default(), &mut rng).is_empty());
+                assert!(!build(mode, stage, &Progress::default(), false, &mut rng).is_empty());
             }
         }
     }

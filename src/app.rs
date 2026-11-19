@@ -157,6 +157,8 @@ pub struct App {
     settle_until: Option<Instant>,
     /// The breather between drills, while it's on screen.
     rest: Option<Rest>,
+    /// The accuracy of the last drill finished this time round.
+    last_acc: Option<f64>,
     /// The help screen is open over whatever's showing.
     help: bool,
     /// How far the help screen is scrolled, and the most it can be at the last draw.
@@ -223,11 +225,11 @@ impl App {
     pub fn new(progress: Progress, path: PathBuf, now: Instant, phase: Phase) -> App {
         let mut rng = Rng::new();
         let stage = progress.stage.min(layout::last());
-        let leaning = crate::drill::leaning(Mode::Words, stage, &progress);
+        let leaning = crate::drill::leaning(Mode::Words, stage, &progress, false);
         let drill = Drill::new(
             Mode::Words,
             stage,
-            build(Mode::Words, stage, &progress, &mut rng),
+            build(Mode::Words, stage, &progress, false, &mut rng),
             now,
         );
         App {
@@ -250,6 +252,7 @@ impl App {
             abandons: Vec::new(),
             settle_until: None,
             rest: None,
+            last_acc: None,
             help: false,
             help_scroll: 0,
             help_max_scroll: std::cell::Cell::new(0),
@@ -268,8 +271,16 @@ impl App {
     }
 
     fn new_drill(&mut self, now: Instant) {
-        let text = build(self.mode, self.stage(), &self.progress, &mut self.rng);
-        self.leaning = crate::drill::leaning(self.mode, self.stage(), &self.progress);
+        // after a rough run, the next drill goes easy on the hard keys
+        let gentle = self.last_acc.is_some_and(|a| a < BLOCK_ACCURACY);
+        let text = build(
+            self.mode,
+            self.stage(),
+            &self.progress,
+            gentle,
+            &mut self.rng,
+        );
+        self.leaning = crate::drill::leaning(self.mode, self.stage(), &self.progress, gentle);
         self.drill = Drill::new(self.mode, self.stage(), text, now);
     }
 
@@ -535,6 +546,7 @@ impl App {
             good,
         ));
         self.rest = (acc < BLOCK_ACCURACY).then(|| Rest::rough(now));
+        self.last_acc = Some(acc);
         if self.phase == Phase::Practice {
             let secs = (self.drill.elapsed(now).as_secs_f64() * 10.0).round() / 10.0;
             self.practice_next(secs, wpm, acc, now);
@@ -2225,6 +2237,32 @@ mod guided_tests {
         app.practice_next(60.0, 12.0, 98.0, now);
         assert!(app.rest.is_some_and(|r| r.cue.contains("Halfway")));
         assert!(!app.message.as_ref().unwrap().0.contains("Press enter"));
+    }
+
+    #[test]
+    fn after_a_rough_run_the_next_drill_doesnt_lean_on_hard_keys() {
+        let mut app = practising("gentle");
+        let stage = app.progress.letters.entry("1".into()).or_default();
+        for (c, ms) in [('a', 250.0), ('b', 260.0), ('c', 270.0), ('k', 2000.0)] {
+            stage.insert(
+                c.to_string(),
+                crate::store::LetterStat {
+                    n: 20,
+                    miss: 0,
+                    ms: ms * 20.0,
+                },
+            );
+        }
+        let now = Instant::now();
+        app.mode = Mode::Words;
+        app.new_drill(now);
+        assert_eq!(app.leaning, vec!['k']);
+        app.last_acc = Some(90.0);
+        app.new_drill(now);
+        assert!(app.leaning.is_empty(), "easy wins after a rough run");
+        app.last_acc = Some(97.0);
+        app.new_drill(now);
+        assert_eq!(app.leaning, vec!['k']);
     }
 
     #[test]

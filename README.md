@@ -140,7 +140,11 @@ A guided session has four steps, one screen each:
    breather after it, and the halfway mark a 30-second stretch; `enter`
    skips either. Two runs in a row under 95% ease off to key recall, one key
    at a time, after a longer breather. Two more after that end practice:
-   that's the time to rest. If you quit before 10:00, the next practice today
+   that's the time to rest. New keys, review and key recall give extra reps
+   to the keys you've been slowest on or missed most over your last couple
+   of sessions, spread out so they never bunch up, except straight after a
+   run under 95%, when the next drill is easy wins. Real text is never
+   weighted. If you quit before 10:00, the next practice today
    picks up where you left off; once a session reaches 10:00, the next one
    starts at 0:00, and so does tomorrow's.
 4. **Report**: this session against your last few, your slowest keys, what's
