@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-11-20
+
 - Every profile is a folder of its own in `~/.local/share/very-normal/profiles/`, and `main` is the one that opens. The first run of this version moves an existing default (split between `~/.config/very-normal` and `~/.local/share/very-normal`) into `profiles/main`, unless there's already a `main`.
 - `$VERY_NORMAL_PROFILE=<name>` opens another profile by default; `--profile <name>` and `$VERY_NORMAL_HOME=<dir>` still work. `$VERY_NORMAL_DATA` and `$VERY_NORMAL_PLAN` are gone, with a note if they're still set.
 - `very-normal profiles` lists your profiles, and `very-normal profile rename` and `profile remove` rename or delete one (never the one in use).
