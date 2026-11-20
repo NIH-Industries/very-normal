@@ -25,6 +25,8 @@ usage: very-normal                  a guided session: layout, warm-up, practice
        very-normal make-plan [...]  make a layout and plan from your own typing
                                     (very-normal make-plan --help for its options)
        very-normal use <name>       switch plans; each plan keeps its own progress
+       very-normal use qwerty       no new layout: just practise on QWERTY (or dvorak,
+                                    colemak, colemak-dh, workman, norman)
        very-normal remove <name>    delete a plan you made, its summary and its progress
        very-normal rename <name> <new name>
                                     give a plan you made a better name
@@ -91,6 +93,10 @@ fn main() -> Result<()> {
         }
         ["-h" | "--help" | "help"] => print!("{HELP}"),
         ["-V" | "--version"] => println!("very-normal {}", env!("CARGO_PKG_VERSION")),
+        ["next" | "check"] if layout::staying() => println!(
+            "You're practising on {} with no new layout, so there's nothing to change on your keyboard.",
+            layout::plan().name
+        ),
         ["next"] => {
             let p = Progress::load(&path)?;
             for line in report::next_stage(p.stage, &oryx::edit_url(&oryx::layout_id())) {
@@ -247,7 +253,8 @@ fn welcome(progress: &std::path::Path) -> Result<bool> {
     let typed = corpus::typed_messages(&projects).len();
     println!("Welcome to very-normal.\n");
     println!("very-normal can make you a keyboard layout from your own typing, and a plan");
-    println!("that moves you there from the layout you type on now, a few keys at a time.\n");
+    println!("that moves you there from the layout you type on now, a few keys at a time.");
+    println!("Or it can just be a typing tutor for the layout you already have.\n");
     let enough = typed >= optimise::ENOUGH;
     if enough {
         println!(
@@ -269,6 +276,7 @@ fn welcome(progress: &std::path::Path) -> Result<bool> {
         println!("  1  make my layout from my Claude Code messages now (about a minute)");
     }
     println!("  2  use Very Normal, the built-in layout, for now (it starts from QWERTY)");
+    println!("  3  no new layout: just practise on the one I type on now");
     println!("  q  quit, and come back with make-plan\n");
     let choice = ask(if enough {
         "Choose [1]: "
@@ -303,6 +311,21 @@ fn welcome(progress: &std::path::Path) -> Result<bool> {
         "2" => {
             Progress::default().save(progress)?;
             Ok(true)
+        }
+        "3" => {
+            let (name, keys) = plans::start(&ask_start()?)?;
+            let name = if named::find(&name).is_some() {
+                name
+            } else {
+                "My Layout".to_string()
+            };
+            let (made, words) = plans::stay(&name, &keys)?;
+            plans::activate(&made)?;
+            Progress::default().save(progress)?;
+            println!(
+                "\nPractising on {name}, with no new layout. {words} `very-normal make-plan` any time you're curious."
+            );
+            Ok(ask("\nPress enter to start training, or q to quit: ")? != "q")
         }
         _ => Ok(false),
     }

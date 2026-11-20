@@ -56,6 +56,16 @@ pub fn items(progress: &Progress, stage: usize) -> Vec<Item> {
             (n, Some(b)) => format!("{n} run(s), averaging {b:.0} WPM"),
             (n, None) => format!("{n} run(s)"),
         };
+        let baseline = Item {
+            label: "Baseline recorded".into(),
+            ok: n >= 3 || manual.wpm > 0.0,
+            detail,
+            tick: None,
+        };
+        // with no keys moving, there's no keyboard setup to keep safe
+        if crate::layout::staying() {
+            return vec![baseline];
+        }
         return vec![
             Item {
                 label: "Planck setup kept safe (old revision or firmware file)".into(),
@@ -63,12 +73,7 @@ pub fn items(progress: &Progress, stage: usize) -> Vec<Item> {
                 detail: String::new(),
                 tick: Some(Tick::Kept),
             },
-            Item {
-                label: "Baseline recorded".into(),
-                ok: n >= 3 || manual.wpm > 0.0,
-                detail,
-                tick: None,
-            },
+            baseline,
         ];
     }
 

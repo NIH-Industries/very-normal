@@ -719,6 +719,21 @@ pub struct Made {
     pub slug: String,
 }
 
+/// Your everyday words from your typing to Claude Code, most used first, when
+/// there's enough of it to draw on.
+pub fn your_words() -> Option<Vec<String>> {
+    let msgs = corpus::typed_messages(&corpus::claude_projects());
+    if msgs.len() < ENOUGH {
+        return None;
+    }
+    let words: Vec<String> = vocabulary(&msgs.join("\n"))
+        .into_iter()
+        .take(500)
+        .map(|(w, _)| w)
+        .collect();
+    (words.len() >= 50).then_some(words)
+}
+
 /// Reads your writing according to the options: what was found, and where from.
 pub fn gather(o: &Options) -> Result<(Vec<String>, Vec<&'static str>)> {
     let mut msgs = Vec::new();

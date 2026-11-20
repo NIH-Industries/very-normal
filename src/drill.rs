@@ -44,6 +44,7 @@ impl Mode {
     pub fn label(self) -> &'static str {
         match self {
             Mode::Recall => "key recall",
+            Mode::Words if layout::staying() => "weak keys",
             Mode::Words => "new keys",
             Mode::Review => "review",
             Mode::Real => "real text 60s",
@@ -65,6 +66,9 @@ impl Mode {
     }
 
     pub fn describe(self, stage: usize) -> String {
+        if layout::staying() {
+            return self.describe_staying();
+        }
         match self {
             Mode::Recall if stage == 0 => "Single home-row keys. Pick a stage to drill its moved keys.".into(),
             Mode::Recall => format!(
@@ -79,6 +83,20 @@ impl Mode {
             Mode::Real => "60 seconds of your most common words. The gate compares this with your baseline.".into(),
             Mode::Links => "[text](link) shapes for your symbol layers. The gate ignores it.".into(),
             Mode::Mirror => "Left hand only. Hold the mirror key for right-hand letters; the second letter on each left key is what it types then. The gate ignores it.".into(),
+        }
+    }
+}
+
+impl Mode {
+    /// What each drill is for on a plan that stays on the layout you have.
+    fn describe_staying(self) -> String {
+        match self {
+            Mode::Recall => "One key at a time from the whole board. Keys you've missed or hesitated on lately come back more often.".into(),
+            Mode::Words => "30 everyday words, leaning on the keys you've been slowest on or missed most lately.".into(),
+            Mode::Review => "Same as weak keys: with no keys moving, there's nothing older to review.".into(),
+            Mode::Real => "60 seconds of everyday words, unweighted. The first three set your baseline; the rest show how you're getting on.".into(),
+            Mode::Links => "[text](link) shapes for your symbol layers.".into(),
+            Mode::Mirror => "Left hand only. Hold the mirror key for right-hand letters; the second letter on each left key is what it types then.".into(),
         }
     }
 }
@@ -128,8 +146,12 @@ impl Default for Rng {
     }
 }
 
-/// The stage's own word list, or common words that use its moved keys.
+/// The stage's own word list, or common words that use its moved keys. On a
+/// plan that stays put, every everyday word: the weighting finds the weak keys.
 fn stage_words(stage: usize) -> Vec<String> {
+    if layout::staying() {
+        return layout::common_words().to_vec();
+    }
     let own = layout::words(stage);
     if stage > 0 && !own.is_empty() {
         return own.to_vec();
@@ -277,7 +299,9 @@ fn words_from(pool: &[String], n: usize, trouble: &BTreeMap<char, f64>, rng: &mu
 /// it's going gently, when every key comes up as often.
 fn weighted_char(stage: usize, progress: &Progress, gentle: bool, rng: &mut Rng) -> char {
     let mut focus = layout::focus(stage);
-    if focus.is_empty() {
+    if focus.is_empty() && layout::staying() {
+        focus = layout::keys(stage);
+    } else if focus.is_empty() {
         focus = "asdfjkl;".chars().collect();
     }
     let stats = recent_letters(stage, progress);

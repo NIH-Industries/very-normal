@@ -52,9 +52,16 @@ pub const BLOCK_ACCURACY: f64 = 95.0;
 pub const SETTLE: Duration = Duration::from_millis(1500);
 
 /// The drill for the `i`th run of a practice block: real text while you're
-/// fresh, then new keys and review in turn.
+/// fresh, then new keys and review in turn. On a plan that stays put, real
+/// text and weak keys take turns.
 pub fn practice_mode(i: usize) -> Mode {
+    practice_mode_for(i, layout::staying())
+}
+
+fn practice_mode_for(i: usize, staying: bool) -> Mode {
     match i {
+        i if staying && i % 2 == 0 => Mode::Real,
+        _ if staying => Mode::Words,
         0 => Mode::Real,
         i if i % 2 == 1 => Mode::Words,
         _ => Mode::Review,
@@ -709,6 +716,7 @@ impl App {
                 self.phase = Phase::Layout;
                 self.message = None;
             }
+            KeyCode::Char('c' | 'o') if layout::staying() => {}
             KeyCode::Char('c') => {
                 self.check = match oryx::fetch(&self.layout_id) {
                     Ok(snap) => report::check(&snap, stage),
@@ -778,7 +786,11 @@ impl App {
         ];
         para(
             &mut lines,
-            "Layout, warm-up, ten minutes of practice, then a report. Practice starts with real text, then takes new keys and review in turn.",
+            if layout::staying() {
+                "Layout, warm-up, ten minutes of practice, then a report. Practice starts with real text, then weak keys and real text take turns."
+            } else {
+                "Layout, warm-up, ten minutes of practice, then a report. Practice starts with real text, then takes new keys and review in turn."
+            },
         );
         para(
             &mut lines,
@@ -889,6 +901,7 @@ impl App {
             }
             Phase::Practice => return self.render_practice(frame, now),
             Phase::Report => return self.render_report(frame),
+            Phase::Dashboard if layout::staying() => return self.render_staying(frame),
             Phase::Dashboard => {}
         }
         let s = self.stage();
@@ -939,6 +952,72 @@ impl App {
             footer,
         );
         let _ = now;
+    }
+
+    /// The dashboard for a plan that stays on the layout you have: how you're
+    /// getting on, with no stages, gate or Oryx.
+    fn render_staying(&self, frame: &mut Frame) {
+        let [header, _, main, message, footer] = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(u16::from(self.message.is_some())),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled(
+                        format!("{}  ", layout::plan().name.to_lowercase()),
+                        Style::new().fg(PINK).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("no new layout", Style::new().add_modifier(Modifier::BOLD)),
+                ]),
+                Line::styled("Just getting better at the one you have.", dim()),
+            ]),
+            header,
+        );
+        let mut lines = vec![Line::raw("")];
+        for (i, section) in staying_lines(&report::standing(&self.progress), &self.advice())
+            .into_iter()
+            .enumerate()
+        {
+            if i > 0 {
+                lines.push(Line::raw(""));
+            }
+            let (title, body) = section;
+            lines.push(Line::styled(
+                title.to_string(),
+                Style::new().fg(PINK).add_modifier(Modifier::BOLD),
+            ));
+            lines.push(Line::raw(""));
+            for l in body {
+                lines.push(Line::raw(format!("  {l}")));
+            }
+        }
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(
+                    Block::bordered()
+                        .border_style(Style::new().fg(TEAL))
+                        .title(" how you're getting on ")
+                        .padding(ratatui::widgets::Padding::horizontal(1)),
+                )
+                .wrap(Wrap { trim: false }),
+            main,
+        );
+        if let Some((msg, good)) = &self.message {
+            let color = if *good { Color::Green } else { Color::Yellow };
+            frame.render_widget(
+                Paragraph::new(msg.clone()).style(Style::new().fg(color)),
+                message,
+            );
+        }
+        frame.render_widget(
+            Paragraph::new("enter session · 1-6 drill · g charts · ? help · q quit").style(dim()),
+            footer,
+        );
     }
 
     /// The end of a guided session.
@@ -1001,15 +1080,21 @@ impl App {
             }
             lines.push(Line::raw(""));
         }
-        lines.push(head("Before the next stage"));
-        lines.push(Line::raw(""));
-        if r.to_come.is_empty() {
-            lines.push(Line::raw("  Every gate item for this stage is done."));
+        if !layout::staying() || !r.to_come.is_empty() {
+            lines.push(head(if layout::staying() {
+                "Still to do"
+            } else {
+                "Before the next stage"
+            }));
+            lines.push(Line::raw(""));
+            if r.to_come.is_empty() {
+                lines.push(Line::raw("  Every gate item for this stage is done."));
+            }
+            for item in &r.to_come {
+                lines.extend(hanging("·", Style::new(), 2, item, width));
+            }
+            lines.push(Line::raw(""));
         }
-        for item in &r.to_come {
-            lines.extend(hanging("·", Style::new(), 2, item, width));
-        }
-        lines.push(Line::raw(""));
         if let Some(t) = &r.trend {
             lines.push(head("Real text"));
             lines.push(Line::raw(""));
@@ -1137,7 +1222,11 @@ impl App {
                     Style::new().fg(PINK).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("stage {s} of {} · {}", layout::last(), layout::name(s)),
+                    if layout::staying() {
+                        "no new layout".to_string()
+                    } else {
+                        format!("stage {s} of {} · {}", layout::last(), layout::name(s))
+                    },
                     Style::new().add_modifier(Modifier::BOLD),
                 ),
             ])),
@@ -1148,7 +1237,9 @@ impl App {
             .iter()
             .map(|c| c.to.to_string())
             .collect();
-        let text = if moved.is_empty() {
+        let text = if layout::staying() {
+            "Nothing moves: this is the layout you type on. Settle in and type.".to_string()
+        } else if moved.is_empty() {
             "Nothing moves this stage. Settle in and type.".to_string()
         } else {
             format!(
@@ -1372,12 +1463,16 @@ impl App {
             ));
             lines.push(Line::from(spans));
         }
-        let legend = Line::from(vec![
-            Span::styled("pink", Style::new().fg(PINK)),
-            Span::styled(" moves this stage · ", dim()),
-            Span::styled("teal", Style::new().fg(TEAL)),
-            Span::styled(" moved earlier · yellow: the key you're looking for", dim()),
-        ]);
+        let legend = if layout::staying() {
+            Line::styled("yellow: the key you're looking for", dim())
+        } else {
+            Line::from(vec![
+                Span::styled("pink", Style::new().fg(PINK)),
+                Span::styled(" moves this stage · ", dim()),
+                Span::styled("teal", Style::new().fg(TEAL)),
+                Span::styled(" moved earlier · yellow: the key you're looking for", dim()),
+            ])
+        };
         let block = Block::bordered().title(" voyager ").title_bottom(legend);
         frame.render_widget(Paragraph::new(lines).block(block), area);
     }
@@ -1559,6 +1654,51 @@ impl App {
         }
         vec![Line::from(spans)]
     }
+}
+
+/// The staying dashboard's sections: a title and its lines.
+fn staying_lines(
+    st: &report::Standing,
+    advice: &coach::Advice,
+) -> Vec<(&'static str, Vec<String>)> {
+    let mut speed = Vec::new();
+    match st.baseline {
+        Some(b) => speed.push(format!("Started at {b:.0} WPM.")),
+        None => speed.push("Your first three real-text runs set where you started.".into()),
+    }
+    if let Some((wpm, acc, n)) = st.recent {
+        let vs = st.baseline.map_or(String::new(), |b| {
+            format!(", {:+.0} on where you started", wpm - b)
+        });
+        speed.push(format!(
+            "Lately {wpm:.0} WPM at {acc:.1}% (your last {n} real-text runs){vs}."
+        ));
+    }
+    if let Some(best) = st.best {
+        speed.push(format!(
+            "Best {best:.0} WPM at {:.0}%+.",
+            gate::REAL_ACCURACY
+        ));
+    }
+    let weak = if st.weak.is_empty() {
+        vec!["Not enough typing yet to tell. A few sessions and they'll show.".to_string()]
+    } else {
+        st.weak
+            .iter()
+            .map(|(c, ms, miss)| format!("{c}   {ms:.0}ms · {miss:.0}% missed"))
+            .collect()
+    };
+    let practice = vec![format!(
+        "Today: {} of {} sessions · {}-day streak.",
+        advice.sessions_today,
+        coach::SESSIONS_PER_DAY,
+        advice.streak
+    )];
+    vec![
+        ("Speed", speed),
+        ("Weak keys lately", weak),
+        ("Practice", practice),
+    ]
 }
 
 fn dim() -> Style {
@@ -2045,6 +2185,39 @@ mod guided_tests {
         app.handle_key(key(KeyCode::Char('s')), Instant::now());
         assert_eq!(app.phase, Phase::Practice);
         app
+    }
+
+    #[test]
+    fn staying_put_takes_turns_with_real_text_and_weak_keys() {
+        let modes: Vec<Mode> = (0..4).map(|i| practice_mode_for(i, true)).collect();
+        assert_eq!(modes, [Mode::Real, Mode::Words, Mode::Real, Mode::Words]);
+    }
+
+    #[test]
+    fn the_staying_dashboard_says_how_youre_getting_on() {
+        let advice = coach::assess(&[], now_ms());
+        let empty = staying_lines(&report::Standing::default(), &advice);
+        let text = format!("{empty:?}");
+        assert!(
+            text.contains("first three real-text runs") && text.contains("Not enough typing"),
+            "{text}"
+        );
+        let st = report::Standing {
+            baseline: Some(50.0),
+            recent: Some((56.0, 96.5, 5)),
+            best: Some(61.0),
+            weak: vec![('k', 420.0, 8.0)],
+        };
+        let text = format!("{:?}", staying_lines(&st, &advice));
+        assert!(text.contains("Started at 50 WPM"), "{text}");
+        assert!(
+            text.contains("Lately 56 WPM at 96.5%") && text.contains("+6 on where you started"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Best 61 WPM") && text.contains("k   420ms · 8% missed"),
+            "{text}"
+        );
     }
 
     #[test]

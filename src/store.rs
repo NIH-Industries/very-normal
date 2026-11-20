@@ -196,8 +196,13 @@ impl Progress {
             let typed = self.manual(0).wpm;
             return (typed > 0.0).then_some(typed);
         }
-        let last: Vec<_> = real.iter().rev().take(3).collect();
-        Some(last.iter().map(|r| r.wpm).sum::<f64>() / last.len() as f64)
+        // staying put, stage 0 never ends: the first three are where you started
+        let picked: Vec<_> = if crate::layout::staying() {
+            real.iter().take(3).collect()
+        } else {
+            real.iter().rev().take(3).collect()
+        };
+        Some(picked.iter().map(|r| r.wpm).sum::<f64>() / picked.len() as f64)
     }
 
     pub fn pairs(&self, stage: usize) -> BTreeMap<String, LetterStat> {

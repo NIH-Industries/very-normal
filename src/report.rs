@@ -367,9 +367,88 @@ fn fit(points: &[f64], target: f64) -> Fit {
     Fit::Sessions(((target - fitted) / slope).ceil().max(1.0) as u64)
 }
 
+/// How you're getting on, for a plan that stays on the layout you have.
+#[derive(Debug, Default, PartialEq)]
+pub struct Standing {
+    /// Where you started: your first real-text runs, or the number typed in.
+    pub baseline: Option<f64>,
+    /// Your last few real-text runs: WPM, accuracy and how many.
+    pub recent: Option<(f64, f64, usize)>,
+    /// Your fastest real-text run at the gate's accuracy.
+    pub best: Option<f64>,
+    /// Your weakest keys lately, worst first: the key, its average ms and miss rate.
+    pub weak: Vec<(char, f64, f64)>,
+}
+
+/// Real-text runs averaged for "lately".
+pub const RECENT_REAL: usize = 5;
+
+pub fn standing(progress: &Progress) -> Standing {
+    let real = progress.runs_for(0, "real");
+    let recent: Vec<&Run> = real.iter().rev().take(RECENT_REAL).copied().collect();
+    let letters = crate::drill::recent_letters(0, progress);
+    let mut trouble: Vec<(char, f64)> = crate::drill::trouble(0, progress).into_iter().collect();
+    trouble.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let weak = trouble
+        .into_iter()
+        .take(5)
+        .filter_map(|(c, _)| {
+            let l = letters.get(&c.to_string())?;
+            let tries = (l.n + l.miss).max(1) as f64;
+            Some((c, l.average_ms()?, 100.0 * l.miss as f64 / tries))
+        })
+        .collect();
+    Standing {
+        baseline: progress.baseline(),
+        recent: (!recent.is_empty()).then(|| {
+            let (wpm, acc) = means(&recent);
+            (wpm, acc, recent.len())
+        }),
+        best: real
+            .iter()
+            .filter(|r| r.acc >= gate::REAL_ACCURACY)
+            .map(|r| r.wpm)
+            .reduce(f64::max),
+        weak,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standing_sums_up_real_text_and_weak_keys() {
+        let mut p = Progress::default();
+        assert_eq!(standing(&p), Standing::default());
+        let stat = |ms: f64, miss| LetterStat {
+            n: 10,
+            miss,
+            ms: ms * 10.0,
+        };
+        for (wpm, acc) in [(40.0, 97.0), (44.0, 90.0), (46.0, 96.0)] {
+            p.runs.push(Run {
+                stage: 0,
+                mode: "real".into(),
+                wpm,
+                acc,
+                letters: BTreeMap::from([
+                    ("a".to_string(), stat(250.0, 0)),
+                    ("b".to_string(), stat(260.0, 0)),
+                    ("c".to_string(), stat(270.0, 0)),
+                    ("k".to_string(), stat(900.0, 1)),
+                ]),
+                ..Run::default()
+            });
+        }
+        let st = standing(&p);
+        let (wpm, acc, n) = st.recent.unwrap();
+        assert_eq!(n, 3);
+        assert!((wpm - 130.0 / 3.0).abs() < 0.01 && (acc - 283.0 / 3.0).abs() < 0.01);
+        assert_eq!(st.best, Some(46.0), "the 90% run doesn't count");
+        assert_eq!(st.weak[0].0, 'k');
+        assert!((st.weak[0].1 - 900.0).abs() < 0.01 && st.weak[0].2 > 0.0);
+    }
 
     #[test]
     fn stage_two_edits_keep_holds_and_list_mirror_keys() {

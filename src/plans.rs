@@ -133,6 +133,28 @@ fn plan_start(s: &str) -> Result<Option<(String, String)>> {
     Ok(Some((name, keys)))
 }
 
+/// Writes a plan that stays on `keys`, called `name`, beside the plans you've
+/// made. Its drill words are your own, from your typing to Claude Code when
+/// there's enough of it, or everyday English. Says where, and which words.
+pub fn stay(name: &str, keys: &str) -> Result<(PathBuf, &'static str)> {
+    named::check(keys)?;
+    let (words, own) = match crate::optimise::your_words() {
+        Some(words) => (words, true),
+        None => (layout::everyday_words(), false),
+    };
+    let text = Plan::stay_toml(name, keys, &words, own);
+    Plan::parse(&text).context("the stay plan doesn't load; that's a bug")?;
+    let path = made_path(name);
+    std::fs::create_dir_all(dir())?;
+    std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
+    let words = if own {
+        "Its drill words are your own, from your typing to Claude Code."
+    } else {
+        "Its drill words are everyday English."
+    };
+    Ok((path, words))
+}
+
 /// Makes a plan the active one. Only for a fresh start: nothing to park.
 pub fn activate(made: &Path) -> Result<()> {
     let to = layout::plan_path();
@@ -152,11 +174,30 @@ pub fn switch(target: &str, progress: &Path) -> Result<String> {
     if want == current {
         bail!("you're already practising {}", layout::plan().name);
     }
-    let made = dir().join(format!("{want}.toml"));
+    let mut made = dir().join(format!("{want}.toml"));
+    let mut words = "";
     let builtin = want == builtin_slug() && !made.exists();
     if !builtin && !made.exists() {
-        bail!("no plan called {target}; you have: {}", list().join(", "));
+        // a layout people type on: a plan that stays there
+        let Some((name, keys)) = named::find(target) else {
+            bail!(
+                "no plan called {target}; you have: {}. Or name a layout to just practise on it: {}",
+                list().join(", "),
+                named::STARTS.join(", ")
+            );
+        };
+        if slug(name) == current {
+            bail!("you're already practising {name}");
+        }
+        made = made_path(name);
+        if !made.exists() {
+            words = stay(name, keys)?.1;
+        }
     }
+    let want = made
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map_or(want, String::from);
     let plan = if builtin {
         Plan::parse(layout::EXAMPLE)?
     } else {
@@ -198,12 +239,22 @@ pub fn switch(target: &str, progress: &Path) -> Result<String> {
         ));
     }
     Ok(format!(
-        "Now practising {}{}. Your progress on {current} is kept for when you switch back.",
+        "Now practising {}{}{}. Your progress on {current} is kept for when you switch back.{}",
         plan.name,
         if resumed {
             ", where you left off"
         } else {
             " from the start"
+        },
+        if plan.staying() {
+            ", with no new layout: just practice"
+        } else {
+            ""
+        },
+        if words.is_empty() {
+            String::new()
+        } else {
+            format!(" {words}")
         }
     ))
 }

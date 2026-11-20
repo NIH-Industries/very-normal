@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- very-normal works as a plain typing tutor too. `very-normal use qwerty` (or dvorak, colemak, colemak-dh, workman, norman), or "no new layout" on the first run, makes a plan with one stage that stays on the layout you have. Practice takes turns between real text and **weak keys** (everyday words leaning on your slowest and most-missed keys lately), key recall drills the whole board, and the dashboard shows how you're getting on: where you started, your last few real-text runs against that, your best, and your weakest keys. No stages, gate or Oryx edits. Its drill words are your own, from your typing to Claude Code, when there's enough of it, or otherwise 500 everyday English words counted from Tatoeba's English sentences (CC BY 2.0 FR).
+
 ## 0.6.0 - 2026-11-20
 
 - A missed key shows in a soft lavender instead of red: a nudge, not an alarm.

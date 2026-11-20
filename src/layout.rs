@@ -13,6 +13,18 @@ use serde::Deserialize;
 
 /// Mark's plan, used when you haven't made your own.
 pub const EXAMPLE: &str = include_str!("../examples/very-normal.toml");
+/// Everyday English words, most used first, from Tatoeba (CC BY 2.0 FR).
+const EVERYDAY: &str = include_str!("../data/everyday-words.txt");
+
+/// Everyday English words, most used first: drill words for anyone without
+/// enough typing of their own.
+pub fn everyday_words() -> Vec<String> {
+    EVERYDAY
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .map(|l| l.trim().to_string())
+        .collect()
+}
 
 pub const OUTER_LEFT: [&str; 3] = ["tab", "esc", "shf"];
 pub const OUTER_RIGHT: [&str; 3] = ["bsp", "'", "ent"];
@@ -38,7 +50,7 @@ pub struct Plan {
     pub home_row_mods: Vec<String>,
     #[serde(default)]
     pub common_words: Vec<String>,
-    #[serde(rename = "stage")]
+    #[serde(rename = "stage", default)]
     pub stages: Vec<Stage>,
 }
 
@@ -61,6 +73,43 @@ pub struct Stage {
 }
 
 impl Plan {
+    /// One stage and nowhere to go: practice on the layout you have.
+    pub fn staying(&self) -> bool {
+        self.stages.len() == 1
+    }
+
+    /// A plan that stays on `keys`, called `name`, with `common_words` for its
+    /// drills: `own` when they're from your own typing, so the file is private.
+    pub fn stay_toml(name: &str, keys: &str, common_words: &[String], own: bool) -> String {
+        let rows: Vec<String> = keys
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(10)
+            .map(|r| r.iter().collect())
+            .collect();
+        let words: Vec<String> = common_words
+            .iter()
+            .map(|w| serde_json::to_string(w).expect("a string"))
+            .collect();
+        let source = if own {
+            "# The drill words are your own vocabulary, from your typing to Claude Code: keep\n\
+             # this file private.\n"
+        } else {
+            "# The drill words are everyday English, counted from Tatoeba (CC BY 2.0 FR).\n"
+        };
+        format!(
+            "# A very-normal plan that stays on {name}: no new layout, just practice.\n\
+             # Made by `very-normal use`. Switch to a plan that moves keys any time.\n\
+             {source}\n\
+             name = {}\n\ncommon_words = [{}]\n\n\
+             [[stage]]\nname = {}\nblurb = \"No keys move: practice on the layout you type on now.\"\nkeys = {}\n",
+            serde_json::to_string(name).expect("a string"),
+            words.join(", "),
+            serde_json::to_string(name).expect("a string"),
+            serde_json::to_string(&rows.join(" ")).expect("a string"),
+        )
+    }
+
     pub fn parse(text: &str) -> Result<Plan> {
         let mut plan: Plan = toml::from_str(text)?;
         for stage in &mut plan.stages {
@@ -77,8 +126,8 @@ impl Plan {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.stages.len() < 2 {
-            bail!("a plan needs at least two stages: where you start and where you're going");
+        if self.stages.is_empty() {
+            bail!("a plan needs at least one stage: the layout you start on");
         }
         let mut start: Vec<char> = self.stages[0].keys.chars().collect();
         start.sort_unstable();
@@ -168,6 +217,11 @@ pub fn plan() -> &'static Plan {
 
 pub fn last() -> usize {
     plan().stages.len() - 1
+}
+
+/// A plan with one stage: practice on the layout you have, going nowhere new.
+pub fn staying() -> bool {
+    plan().staying()
 }
 
 fn stage(s: usize) -> &'static Stage {
@@ -359,15 +413,51 @@ mod tests {
     }
 
     #[test]
+    fn everyday_words_are_plain_lowercase_english_without_names() {
+        let words = everyday_words();
+        assert_eq!(words.len(), 500);
+        assert_eq!(&words[..3], ["the", "to", "i"]);
+        assert!(
+            words
+                .iter()
+                .all(|w| w.chars().all(|c| c.is_ascii_lowercase() || c == '\''))
+        );
+        for name in ["tom", "mary", "push", "branch"] {
+            assert!(!words.contains(&name.to_string()), "{name}");
+        }
+        let plan = Plan::stay_toml("QWERTY", crate::named::QWERTY, &words, false);
+        assert!(plan.contains("Tatoeba") && !plan.contains("private"));
+        assert!(Plan::parse(&plan).unwrap().staying());
+        let own = Plan::stay_toml("QWERTY", crate::named::QWERTY, &words, true);
+        assert!(own.contains("keep\n# this file private"));
+    }
+
+    #[test]
+    fn a_stay_plan_is_one_stage_on_your_layout() {
+        let words: Vec<String> = (0..60).map(|i| format!("w{i}")).collect();
+        let dvorak = "',.pyfgcrlaoeuidhtns;qjkxbmwvz";
+        let plan = Plan::parse(&Plan::stay_toml("Dvorak", dvorak, &words, false)).unwrap();
+        assert!(plan.staying());
+        assert_eq!(plan.name, "Dvorak");
+        assert_eq!(plan.stages[0].keys, dvorak);
+        assert_eq!(plan.common_words, words);
+    }
+
+    #[test]
     fn rejects_broken_plans() {
         let q = "qwertyuiop asdfghjkl; zxcvbnm,./";
         let swap = "qwertyuiop asdfghjkl; zxcvbmn,./";
         assert!(plan_with(&[q, swap], "").is_ok());
         assert!(
-            plan_with(&[q], "")
+            plan_with(&[q], "").unwrap().staying(),
+            "one stage stays put"
+        );
+        assert!(!plan_with(&[q, swap], "").unwrap().staying());
+        assert!(
+            plan_with(&[], "")
                 .unwrap_err()
                 .to_string()
-                .contains("two stages")
+                .contains("at least one stage")
         );
         assert!(
             plan_with(&[q, q], "")

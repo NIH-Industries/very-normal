@@ -98,6 +98,30 @@ much.
 See [MAKE_YOUR_OWN.md](MAKE_YOUR_OWN.md) for how the layout is scored and
 searched for.
 
+## Just practise, with no new layout
+
+very-normal is also a plain typing tutor for the layout you already have.
+Choose "no new layout" the first time you run it, or any time after:
+
+```sh
+very-normal use qwerty       # or dvorak, colemak, colemak-dh, workman, norman
+```
+
+That makes a plan with one stage, your layout, and nowhere to go. Practice
+takes turns between real text and **weak keys**: everyday words leaning on
+the keys you've been slowest on or missed most lately. Key recall drills the
+whole board. The dashboard shows how you're getting on instead of stages:
+where you started (your first three real-text runs), your last few runs
+against that, your best, and your weakest keys. There's nothing to change in
+Oryx, so `next` and `check` have nothing to say. Switch to a plan that moves
+keys whenever you're curious, and back again: each keeps its own progress.
+
+The drill words are your own when there's enough of your typing to Claude
+Code (read on your machine, and kept in the plan file, so keep it private).
+Otherwise they're 500 everyday English words built into very-normal, counted
+from the English sentences of [Tatoeba](https://tatoeba.org) under
+[CC BY 2.0 FR](https://creativecommons.org/licenses/by/2.0/fr/).
+
 ## Use
 
 ```sh
@@ -109,6 +133,7 @@ very-normal check            # read the layout from Oryx and compare it with you
 very-normal plan             # which plan you're on, and its stages
 very-normal make-plan        # make a layout and plan from your own typing
 very-normal use <name>       # switch plans; each keeps its own progress
+very-normal use qwerty       # no new layout: just practise on QWERTY (or dvorak, colemak…)
 very-normal remove <name>    # delete a plan you made, with its summary and progress
 very-normal rename <name> <new name>   # give a plan you made a better name
 very-normal share [name]     # share a plan's summary (no text) on GitHub
