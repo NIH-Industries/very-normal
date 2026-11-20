@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-11-20
+
 - A missed key shows in a soft lavender instead of red: a nudge, not an alarm.
 - Breathers between drills: 20 seconds to breathe out and soften your hands after a run under 95%, and 30 seconds to shake out at the halfway mark. `enter` skips them.
 - Two runs in a row under 95% no longer end practice straight away. The block eases off to key recall, one key at a time, after a 45-second breather, and only two more rough runs after that end it.
