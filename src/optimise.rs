@@ -105,7 +105,7 @@ for stdin. --no-claude leaves your Claude Code messages out.
                their Cmd shortcuts, and , . / '). Each one costs the layout a
                little; --lock '' locks nothing.
 --oryx-layout  your Oryx layout id; its home row holds are read from Oryx
---out          the plan (default ~/.config/very-normal/plans/<name>.toml; private)
+--out          the plan (default plans/<name>.toml in your profile; private)
 --summary      the shareable summary (default next to the plan, as .md)
 --force        replace a plan you made before with the same name
 

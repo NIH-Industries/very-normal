@@ -967,13 +967,18 @@ impl App {
         .areas(frame.area());
         frame.render_widget(
             Paragraph::new(vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!("{}  ", layout::plan().name.to_lowercase()),
-                        Style::new().fg(PINK).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled("no new layout", Style::new().add_modifier(Modifier::BOLD)),
-                ]),
+                Line::from(
+                    [
+                        Span::styled(
+                            format!("{}  ", layout::plan().name.to_lowercase()),
+                            Style::new().fg(PINK).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("no new layout", Style::new().add_modifier(Modifier::BOLD)),
+                    ]
+                    .into_iter()
+                    .chain(profile_span())
+                    .collect::<Vec<_>>(),
+                ),
                 Line::styled("Just getting better at the one you have.", dim()),
             ]),
             header,
@@ -1281,7 +1286,7 @@ impl App {
 
     fn render_header(&self, frame: &mut Frame, area: Rect, journey: &[journey::StageLine]) {
         let s = self.stage();
-        let title = Line::from(vec![
+        let mut title = Line::from(vec![
             Span::styled(
                 format!("{}  ", layout::plan().name.to_lowercase()),
                 Style::new().fg(PINK).add_modifier(Modifier::BOLD),
@@ -1291,6 +1296,7 @@ impl App {
                 Style::new().add_modifier(Modifier::BOLD),
             ),
         ]);
+        title.spans.extend(profile_span());
         let current_left = journey.iter().find_map(|l| match l.status {
             journey::Status::Current { left, .. } => Some(left),
             _ => None,
@@ -1654,6 +1660,13 @@ impl App {
         }
         vec![Line::from(spans)]
     }
+}
+
+/// The profile in use, for the dashboard's title, unless it's main: so you
+/// don't practise into a test profile by accident.
+fn profile_span() -> Option<Span<'static>> {
+    crate::profile::label()
+        .map(|p| Span::styled(format!("   profile {p}"), Style::new().fg(Color::Yellow)))
 }
 
 /// The staying dashboard's sections: a title and its lines.

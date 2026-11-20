@@ -11,3 +11,27 @@ Things to keep in mind:
 - Nothing on screen says which profile you're in, so it's easy to practise into a test profile by accident. The dashboard header (one purpose: where you are in the long-term plan) could name the profile when it isn't the default.
 - A way to list, rename and remove profiles may belong with this (today it's `ls`, `mv` and `rm -r`), alongside `very-normal plan`, `use`, `rename` and `remove` for plans.
 - README "Where things live" and "A separate profile", `--help`, and the release notes need to describe the one shape.
+
+---
+
+## Goal
+
+Every profile is a folder of its own in `~/.local/share/very-normal/profiles/`, `main` included, and very-normal can list, rename and remove them.
+
+## Acceptance criteria
+
+1. With nothing set, very-normal uses `profiles/main`. `--profile <name>` wins, then `$VERY_NORMAL_HOME=<dir>`, then `$VERY_NORMAL_PROFILE=<name>`.
+2. When `profiles/main` doesn't exist, an old split default (`~/.config/very-normal/{plan.toml,plans/}` and `~/.local/share/very-normal/{progress.json,charts.html,plans/}`) moves into it, never overwriting anything, and the emptied old folders are removed. It says so on stderr.
+3. `$VERY_NORMAL_DATA` and `$VERY_NORMAL_PLAN` are no longer read; if set, a note on stderr says what to use instead.
+4. `very-normal profiles` lists profiles with the one in use marked and `main` noted as the default. `profile rename <old> <new>` and `profile remove <name>` work on any profile but the one in use.
+5. The dashboard title names the profile when it isn't `main`.
+6. `--help`, the README and the changelog describe the one shape. `cargo test` and `cargo clippy --all-targets -- -D warnings` pass.
+
+## Out of scope
+
+- Choosing the default profile from inside the app (an environment variable does it).
+- XDG base directories.
+
+## Open questions
+
+None.

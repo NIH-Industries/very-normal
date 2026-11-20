@@ -68,7 +68,8 @@ very-normal make-plan --name "My Layout" --text ~/notes ~/Documents/emails.txt
 - `very-normal make-plan --help` lists the rest.
 
 It takes a few seconds, and nothing leaves your machine. It writes two files
-to `~/.config/very-normal/plans/`, named after your layout:
+to `plans/` in your profile
+(`~/.local/share/very-normal/profiles/main/plans/`), named after your layout:
 
 - `<name>.toml`: your layout and its stages, with drill words from your own
   writing. Keep it private, and look through the words for names you'd rather
@@ -211,7 +212,7 @@ weeks"), not dates.
 ## Charts
 
 `very-normal charts` (or `g` on the dashboard) writes
-`~/.local/share/very-normal/charts.html`, one self-contained page that works
+`charts.html` in your profile, one self-contained page that works
 offline, and opens it. It shows:
 
 - speed and accuracy run by run, with stages shaded and the gate's lines
@@ -248,8 +249,7 @@ A plan is a TOML file listing every stage's 30 keys, with a name, blurb,
 stats, vim commands and drill words for each. See
 [examples/very-normal.toml](examples/very-normal.toml).
 
-very-normal loads `~/.config/very-normal/plan.toml` (or `$VERY_NORMAL_PLAN`),
-and falls back to Very Normal when there isn't one.
+very-normal loads `plan.toml` from your profile, and falls back to Very Normal when there isn't one.
 
 ## Any keyboard
 
@@ -273,32 +273,43 @@ laptop can live side by side. The kanata config includes a commented
 
 ## Where things live
 
-- Progress: `~/.local/share/very-normal/progress.json`, or `$VERY_NORMAL_DATA`.
-  The format matches the web tutor's backup text. Progress on the plans
-  you're not practising waits in `plans/` next to it.
-- Plans you've made: `~/.config/very-normal/plans/`, next to the active
-  `plan.toml`.
+- Everything of yours lives in a profile: one folder holding `progress.json`
+  (in the web tutor's backup format), `plan.toml` (the plan you're
+  practising), `charts.html`, and `plans/` (the plans you've made, their
+  summaries, and progress kept for the ones you're not practising). Profiles
+  live in `~/.local/share/very-normal/profiles/<name>`, and `main` is the one
+  that opens.
 - Oryx layout: the plan's `oryx_layout`, or `$VERY_NORMAL_LAYOUT`. Checking
   uses the GraphQL endpoint Oryx's own page uses, which is undocumented and
   needs a public layout link.
 - URLs open with `open` (`xdg-open` on Linux), or `$VERY_NORMAL_OPEN` (`{url}`
   marks the address).
 
-### A separate profile
+### Profiles
 
-`$VERY_NORMAL_HOME` keeps a whole profile in one folder: `progress.json` and
-`plan.toml` there, with made plans and charts beside them. It's a clean slate
-for trying the first run or showing someone, and your own progress is never
-touched. `$VERY_NORMAL_DATA` and `$VERY_NORMAL_PLAN` still win if they're set.
+`main` opens unless something names another profile: `--profile <name>`
+before or after any command, `$VERY_NORMAL_PROFILE=<name>`, or
+`$VERY_NORMAL_HOME=<dir>` for a profile folder anywhere. Another profile is a
+clean slate for trying the first run or showing someone, and `main` is never
+touched. The dashboard names the profile whenever it isn't `main`, so you
+don't practise into a test one by accident.
 
 ```fish
 very-normal --profile demo                   # a named profile you can come back to
 very-normal --profile demo dashboard         # works with any command
+set -Ux VERY_NORMAL_PROFILE work             # open work instead of main
 VERY_NORMAL_HOME=(mktemp -d) very-normal     # a throwaway one, anywhere
+very-normal profiles                         # list them, with the one in use marked
+very-normal profile rename demo try-dvorak
+very-normal profile remove try-dvorak        # deletes its plans and progress
 ```
 
-Named profiles live in `~/.local/share/very-normal/profiles/<name>`; delete
-the folder to start that one over.
+You can't rename or remove the profile you're using; do it from another with
+`--profile`. Before 0.7, the default profile was split between
+`~/.config/very-normal` and `~/.local/share/very-normal`. The first run of a
+newer version moves it into `profiles/main` (unless `main` already exists).
+`$VERY_NORMAL_DATA` and `$VERY_NORMAL_PLAN` are gone: very-normal says so if
+they're still set.
 
 The first run's offer to build a plan from your Claude Code messages still
 reads them from `~/.claude`, so pick the built-in plan if you're showing

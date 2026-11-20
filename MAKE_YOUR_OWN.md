@@ -23,7 +23,7 @@ I'm collecting layouts to see how much they vary between people.
 `very-normal share` opens a new issue on
 [NIH-Industries/very-normal](https://github.com/NIH-Industries/very-normal/issues)
 titled `Layout: <name>`, with your newest plan's summary from
-`~/.config/very-normal/plans/` as its body (`very-normal share <name>` picks
+`plans/` in your profile as its body (`very-normal share <name>` picks
 another).
 Nothing is posted until you press Submit.
 

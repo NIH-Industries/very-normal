@@ -168,28 +168,9 @@ impl Plan {
     }
 }
 
-/// `$VERY_NORMAL_PLAN`, or `plan.toml` in `$VERY_NORMAL_HOME`, or
-/// `~/.config/very-normal/plan.toml`.
+/// `plan.toml` in the profile in use.
 pub fn plan_path() -> PathBuf {
-    plan_path_from(
-        std::env::var_os("VERY_NORMAL_PLAN"),
-        std::env::var_os("VERY_NORMAL_HOME"),
-        std::env::var_os("HOME"),
-    )
-}
-
-fn plan_path_from(
-    plan: Option<std::ffi::OsString>,
-    profile: Option<std::ffi::OsString>,
-    home: Option<std::ffi::OsString>,
-) -> PathBuf {
-    if let Some(p) = plan.filter(|p| !p.is_empty()) {
-        return PathBuf::from(p);
-    }
-    if let Some(dir) = profile.filter(|p| !p.is_empty()) {
-        return PathBuf::from(dir).join("plan.toml");
-    }
-    PathBuf::from(home.unwrap_or_default()).join(".config/very-normal/plan.toml")
+    crate::profile::dir().join("plan.toml")
 }
 
 static PLAN: OnceLock<Plan> = OnceLock::new();
@@ -336,23 +317,6 @@ pub fn find_stage(main: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_profile_folder_holds_the_plan_unless_plan_says_otherwise() {
-        let s = |v: &str| Some(std::ffi::OsString::from(v));
-        assert_eq!(
-            plan_path_from(None, None, s("/h")),
-            PathBuf::from("/h/.config/very-normal/plan.toml")
-        );
-        assert_eq!(
-            plan_path_from(None, s("/tmp/demo"), s("/h")),
-            PathBuf::from("/tmp/demo/plan.toml")
-        );
-        assert_eq!(
-            plan_path_from(s("/x/p.toml"), s("/tmp/demo"), s("/h")),
-            PathBuf::from("/x/p.toml")
-        );
-    }
 
     #[test]
     fn the_example_is_marks_very_normal() {

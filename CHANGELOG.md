@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Every profile is a folder of its own in `~/.local/share/very-normal/profiles/`, and `main` is the one that opens. The first run of this version moves an existing default (split between `~/.config/very-normal` and `~/.local/share/very-normal`) into `profiles/main`, unless there's already a `main`.
+- `$VERY_NORMAL_PROFILE=<name>` opens another profile by default; `--profile <name>` and `$VERY_NORMAL_HOME=<dir>` still work. `$VERY_NORMAL_DATA` and `$VERY_NORMAL_PLAN` are gone, with a note if they're still set.
+- `very-normal profiles` lists your profiles, and `very-normal profile rename` and `profile remove` rename or delete one (never the one in use).
+- The dashboard names the profile whenever it isn't `main`.
+
 - very-normal works as a plain typing tutor too. `very-normal use qwerty` (or dvorak, colemak, colemak-dh, workman, norman), or "no new layout" on the first run, makes a plan with one stage that stays on the layout you have. Practice takes turns between real text and **weak keys** (everyday words leaning on your slowest and most-missed keys lately), key recall drills the whole board, and the dashboard shows how you're getting on: where you started, your last few real-text runs against that, your best, and your weakest keys. No stages, gate or Oryx edits. Its drill words are your own, from your typing to Claude Code, when there's enough of it, or otherwise 500 everyday English words counted from Tatoeba's English sentences (CC BY 2.0 FR).
 
 ## 0.6.0 - 2026-11-20

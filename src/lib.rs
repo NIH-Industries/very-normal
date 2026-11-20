@@ -12,6 +12,7 @@ pub mod named;
 pub mod optimise;
 pub mod oryx;
 pub mod plans;
+pub mod profile;
 pub mod report;
 pub mod store;
 pub mod warmup;

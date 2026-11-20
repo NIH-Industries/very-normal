@@ -8,7 +8,7 @@ use very_normal::app::{App, Phase};
 use very_normal::layout;
 use very_normal::optimise::{self, Options};
 use very_normal::store::{self, Progress};
-use very_normal::{charts, coach, corpus, keymap, named, oryx, plans, report};
+use very_normal::{charts, coach, corpus, keymap, named, oryx, plans, profile, report};
 
 const HELP: &str = "\
 very-normal: move your keyboard to a layout made from your own typing
@@ -31,6 +31,10 @@ usage: very-normal                  a guided session: layout, warm-up, practice
        very-normal rename <name> <new name>
                                     give a plan you made a better name
        very-normal share [name]     share a plan's summary (no text) on GitHub
+       very-normal profiles         your profiles, with the one in use marked
+       very-normal profile rename <name> <new name>
+       very-normal profile remove <name>
+                                    rename or delete a profile (not the one in use)
        very-normal keymap kanata|karabiner [stage] [--all-keyboards]
                                     a software keymap for keyboards without Oryx
                                     (karabiner: built-in keyboard only, unless --all-keyboards)
@@ -39,11 +43,10 @@ usage: very-normal                  a guided session: layout, warm-up, practice
        very-normal export           print your progress as JSON
        very-normal --help | --version
 
-Progress lives in ~/.local/share/very-normal/progress.json ($VERY_NORMAL_DATA).
-Plans live in ~/.config/very-normal ($VERY_NORMAL_PLAN). $VERY_NORMAL_HOME=<dir>
-keeps both in one folder: a separate profile, to try the first run or show
-someone. --profile <name> (before or after any command) does the same with a
-named folder in ~/.local/share/very-normal/profiles. The Oryx layout comes
+A profile is a folder holding your progress, plan and made plans, in
+~/.local/share/very-normal/profiles/<name>. main opens unless --profile <name>
+(before or after any command), $VERY_NORMAL_PROFILE=<name> or
+$VERY_NORMAL_HOME=<any folder> says otherwise. The Oryx layout comes
 from your plan ($VERY_NORMAL_LAYOUT); URLs open with `open`, or `xdg-open` on
 Linux ($VERY_NORMAL_OPEN, where {url} marks the address). `m` plays SomaFM's
 Drone Zone with mpv or ffplay ($VERY_NORMAL_MUSIC: any stream URL or file).
@@ -56,14 +59,31 @@ fn main() -> Result<()> {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
-    let (args, profile) =
-        store::take_profile(std::env::args().skip(1).collect(), std::env::var_os("HOME"))?;
-    if let Some(dir) = profile {
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("making the profile folder {}", dir.display()))?;
-        // SAFETY: still single-threaded, and nothing has read the environment yet
-        unsafe { std::env::set_var("VERY_NORMAL_HOME", &dir) };
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let moved = profile::migrate(&home).context("moving your profile into profiles/main")?;
+    if !moved.is_empty() {
+        eprintln!(
+            "Moved your progress and plans into {}, where every profile lives now.",
+            profile::root(&home).join(profile::DEFAULT).display()
+        );
     }
+    for gone in ["VERY_NORMAL_DATA", "VERY_NORMAL_PLAN"] {
+        if std::env::var_os(gone).is_some_and(|v| !v.is_empty()) {
+            eprintln!(
+                "${gone} isn't used any more: progress and plans live in the profile folder. Use --profile <name>, $VERY_NORMAL_PROFILE or $VERY_NORMAL_HOME."
+            );
+        }
+    }
+    let (args, dir) = profile::resolve(
+        std::env::args().skip(1).collect(),
+        &home,
+        std::env::var_os("VERY_NORMAL_HOME"),
+        std::env::var_os("VERY_NORMAL_PROFILE"),
+    )?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("making the profile folder {}", dir.display()))?;
+    // SAFETY: still single-threaded, and nothing has read the environment yet
+    unsafe { std::env::set_var("VERY_NORMAL_HOME", &dir) };
     let path = store::default_path();
     if args.is_empty()
         && !layout::plan_path().exists()
@@ -181,6 +201,13 @@ fn main() -> Result<()> {
             }
         }
         ["use", name] => println!("{}", plans::switch(name, &path)?),
+        ["profiles"] => {
+            for line in profile::listing() {
+                println!("{line}");
+            }
+        }
+        ["profile", "rename", old, new] => println!("{}", profile::rename(old, new)?),
+        ["profile", "remove", name] => println!("{}", profile::remove(name)?),
         ["remove", name] => println!("{}", plans::remove(name, &path)?),
         ["rename", old, new @ ..] if !new.is_empty() => {
             println!("{}", plans::rename(old, &new.join(" "), &path)?)
