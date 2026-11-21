@@ -1,6 +1,7 @@
 pub mod app;
 pub mod charts;
 pub mod coach;
+pub mod compose;
 pub mod corpus;
 pub mod drill;
 pub mod gate;

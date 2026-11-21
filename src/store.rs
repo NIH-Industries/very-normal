@@ -26,6 +26,12 @@ pub struct Progress {
     /// The local date of the last warm-up, as YYYY-MM-DD.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warmed_up: Option<String>,
+    /// Typing done for real, through `very-normal compose`. Kept apart from
+    /// `runs` so the gate, the coach and the weak-key drills only ever judge
+    /// drills: a delete-key rate and a speed that skips thinking time don't
+    /// compare with a drill's accuracy and WPM.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub freestyle: Vec<Run>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -170,10 +176,13 @@ impl Progress {
             stage.entry(pair.clone()).or_default().add(stat);
         }
         self.runs.push(run);
-        if self.runs.len() > 2000 {
-            let excess = self.runs.len() - 2000;
-            self.runs.drain(..excess);
-        }
+        cap(&mut self.runs);
+    }
+
+    /// Saves a run of real typing from compose mode.
+    pub fn record_freestyle(&mut self, run: Run) {
+        self.freestyle.push(run);
+        cap(&mut self.freestyle);
     }
 
     /// Folds another progress file (such as a web tutor backup) into this one.
@@ -182,16 +191,8 @@ impl Progress {
     /// the same backup twice doesn't double them.
     pub fn merge(&mut self, other: Progress) -> usize {
         let before = self.runs.len();
-        for run in other.runs {
-            let dup = self
-                .runs
-                .iter()
-                .any(|r| r.t == run.t && r.stage == run.stage && r.mode == run.mode);
-            if !dup {
-                self.runs.push(run);
-            }
-        }
-        self.runs.sort_by_key(|r| r.t);
+        merge_runs(&mut self.runs, other.runs);
+        merge_runs(&mut self.freestyle, other.freestyle);
         for (stage, m) in other.manual {
             let mine = self.manual.entry(stage).or_default();
             mine.oryx |= m.oryx;
@@ -210,6 +211,27 @@ impl Progress {
         self.stage = self.stage.max(other.stage);
         self.runs.len() - before
     }
+}
+
+/// Keeps the newest 2000.
+fn cap(runs: &mut Vec<Run>) {
+    if runs.len() > 2000 {
+        let excess = runs.len() - 2000;
+        runs.drain(..excess);
+    }
+}
+
+/// Adds the runs not already there (by time, stage and drill), in time order.
+fn merge_runs(mine: &mut Vec<Run>, theirs: Vec<Run>) {
+    for run in theirs {
+        let dup = mine
+            .iter()
+            .any(|r| r.t == run.t && r.stage == run.stage && r.mode == run.mode);
+        if !dup {
+            mine.push(run);
+        }
+    }
+    mine.sort_by_key(|r| r.t);
 }
 
 #[cfg(test)]
@@ -268,6 +290,35 @@ mod tests {
         assert_eq!(p.runs[0].typos["e>r"], 1);
         let text = serde_json::to_string(&p).unwrap();
         assert_eq!(Progress::parse(&text).unwrap(), p);
+    }
+
+    #[test]
+    fn real_typing_is_kept_apart_from_drills_and_merges_once() {
+        let mut p = Progress::default();
+        let run = Run {
+            t: 5,
+            stage: 1,
+            mode: "compose".into(),
+            wpm: 30.0,
+            acc: 94.0,
+            ..Run::default()
+        };
+        p.record_freestyle(run.clone());
+        assert!(p.runs.is_empty());
+        assert!(p.letters.is_empty());
+        let text = serde_json::to_string(&p).unwrap();
+        let back = Progress::parse(&text).unwrap();
+        assert_eq!(back, p);
+        let mut q = Progress::default();
+        q.merge(back.clone());
+        q.merge(back);
+        assert_eq!(q.freestyle, vec![run]);
+        // a backup with none leaves the field out
+        assert!(
+            !serde_json::to_string(&Progress::default())
+                .unwrap()
+                .contains("freestyle")
+        );
     }
 
     #[test]

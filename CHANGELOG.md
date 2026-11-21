@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `very-normal compose` measures typing done for real. Inside Rex, `very-normal compose -- claude` starts Claude Code in a pane above and makes this one a compose box: `enter` is a newline, and `ctrl-enter` (or `alt-enter`) sends the message whole as one paste. Delete-key presses count as corrections, and the characters typed in their place show in yellow. The status row shows your speed (pauses don't count) and how much you corrected, and suggests a break when corrections pile up or after 50 minutes. With nothing typed, only `esc` and the arrows go to the other pane: a stray key can't answer Claude's permission questions, so answer those in its own pane. The text is never saved: only per-key timings and counts, as compose runs kept apart from drills, so the gate and coach don't see them. The dashboard shows a line on them.
+
 ## 0.7.0 - 2026-11-20
 
 - Every profile is a folder of its own in `~/.local/share/very-normal/profiles/`, and `main` is the one that opens. The first run of this version moves an existing default (split between `~/.config/very-normal` and `~/.local/share/very-normal`) into `profiles/main`, unless there's already a `main`.

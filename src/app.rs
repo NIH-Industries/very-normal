@@ -921,15 +921,28 @@ impl App {
                 .map(|i| 1 + usize::from(!i.detail.is_empty()))
                 .sum::<usize>()
         } + 2;
-        let [header, _, journey_area, lower_area, message, footer] = Layout::vertical([
+        let real_use = report::real_use(&self.progress, now_ms());
+        let [
+            header,
+            _,
+            journey_area,
+            lower_area,
+            real_area,
+            message,
+            footer,
+        ] = Layout::vertical([
             Constraint::Length(2),
             Constraint::Length(1),
             Constraint::Fill(1),
             Constraint::Length(lower as u16),
+            Constraint::Length(u16::from(real_use.is_some())),
             Constraint::Length(u16::from(self.message.is_some())),
             Constraint::Length(1),
         ])
         .areas(frame.area());
+        if let Some(line) = real_use {
+            frame.render_widget(Paragraph::new(line).style(dim()), real_area);
+        }
         self.render_header(frame, header, &journey);
         self.render_journey(frame, journey_area, &journey);
         if passed && s < layout::last() {
@@ -984,9 +997,13 @@ impl App {
             header,
         );
         let mut lines = vec![Line::raw("")];
-        for (i, section) in staying_lines(&report::standing(&self.progress), &self.advice())
-            .into_iter()
-            .enumerate()
+        for (i, section) in staying_lines(
+            &report::standing(&self.progress),
+            &self.advice(),
+            report::real_use(&self.progress, now_ms()),
+        )
+        .into_iter()
+        .enumerate()
         {
             if i > 0 {
                 lines.push(Line::raw(""));
@@ -1673,6 +1690,7 @@ fn profile_span() -> Option<Span<'static>> {
 fn staying_lines(
     st: &report::Standing,
     advice: &coach::Advice,
+    real_use: Option<String>,
 ) -> Vec<(&'static str, Vec<String>)> {
     let mut speed = Vec::new();
     match st.baseline {
@@ -1701,12 +1719,13 @@ fn staying_lines(
             .map(|(c, ms, miss)| format!("{c}   {ms:.0}ms · {miss:.0}% missed"))
             .collect()
     };
-    let practice = vec![format!(
+    let mut practice = vec![format!(
         "Today: {} of {} sessions · {}-day streak.",
         advice.sessions_today,
         coach::SESSIONS_PER_DAY,
         advice.streak
     )];
+    practice.extend(real_use.map(|l| format!("{l}.")));
     vec![
         ("Speed", speed),
         ("Weak keys lately", weak),
@@ -2209,8 +2228,9 @@ mod guided_tests {
     #[test]
     fn the_staying_dashboard_says_how_youre_getting_on() {
         let advice = coach::assess(&[], now_ms());
-        let empty = staying_lines(&report::Standing::default(), &advice);
+        let empty = staying_lines(&report::Standing::default(), &advice, None);
         let text = format!("{empty:?}");
+        assert!(!text.contains("for real"), "{text}");
         assert!(
             text.contains("first three real-text runs") && text.contains("Not enough typing"),
             "{text}"
@@ -2221,7 +2241,12 @@ mod guided_tests {
             best: Some(61.0),
             weak: vec![('k', 420.0, 8.0)],
         };
-        let text = format!("{:?}", staying_lines(&st, &advice));
+        let real = Some("Typing for real: 10 min this week".to_string());
+        let text = format!("{:?}", staying_lines(&st, &advice, real));
+        assert!(
+            text.contains("Typing for real: 10 min this week."),
+            "{text}"
+        );
         assert!(text.contains("Started at 50 WPM"), "{text}");
         assert!(
             text.contains("Lately 56 WPM at 96.5%") && text.contains("+6 on where you started"),

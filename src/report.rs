@@ -413,6 +413,53 @@ pub fn standing(progress: &Progress) -> Standing {
     }
 }
 
+/// One line on the typing done for real through compose mode: how much this
+/// week, how fast and how tidy, and against where it started once there's
+/// more than a week of it. None until there's some.
+pub fn real_use(progress: &Progress, now_ms: u64) -> Option<String> {
+    const WEEK: u64 = 7 * 24 * 60 * 60 * 1000;
+    let runs = &progress.freestyle;
+    let first = runs.first()?.t;
+    let weighted = |rs: &[&Run]| {
+        let secs: f64 = rs.iter().map(|r| r.secs).sum();
+        (secs > 0.0).then(|| {
+            (
+                rs.iter().map(|r| r.wpm * r.secs).sum::<f64>() / secs,
+                rs.iter().map(|r| (100.0 - r.acc) * r.secs).sum::<f64>() / secs,
+                secs,
+            )
+        })
+    };
+    let week: Vec<&Run> = runs.iter().filter(|r| r.t + WEEK >= now_ms).collect();
+    let mut line = match weighted(&week) {
+        Some((wpm, fixed, secs)) => format!(
+            "Typing for real: {} this week · {wpm:.0} WPM · {fixed:.0}% corrected",
+            duration(secs)
+        ),
+        None => {
+            let last: Vec<&Run> = runs.iter().rev().take(5).collect();
+            let (wpm, fixed, _) = weighted(&last)?;
+            format!("Typing for real: none this week (lately {wpm:.0} WPM · {fixed:.0}% corrected)")
+        }
+    };
+    if runs.last()?.t >= first + WEEK {
+        let start: Vec<&Run> = runs.iter().filter(|r| r.t < first + WEEK).collect();
+        if let Some((wpm, fixed, _)) = weighted(&start) {
+            line.push_str(&format!(" · started at {wpm:.0} WPM, {fixed:.0}%"));
+        }
+    }
+    Some(line)
+}
+
+fn duration(secs: f64) -> String {
+    let mins = (secs / 60.0).round() as u64;
+    if mins < 60 {
+        format!("{} min", mins.max(1))
+    } else {
+        format!("{}h {:02}m", mins / 60, mins % 60)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,5 +641,35 @@ mod tests {
         assert!(line.contains("No upward real-text trend yet"), "{line}");
         assert!(line.contains("normal"), "{line}");
         calm(&r);
+    }
+
+    #[test]
+    fn real_use_sums_up_the_week_against_the_start() {
+        const DAY: u64 = 24 * 60 * 60 * 1000;
+        let run = |t, wpm, acc, secs| Run {
+            t,
+            mode: "compose".into(),
+            wpm,
+            acc,
+            secs,
+            ..Run::default()
+        };
+        let mut p = Progress::default();
+        assert_eq!(real_use(&p, 0), None);
+        p.freestyle = vec![run(DAY, 30.0, 90.0, 600.0)];
+        assert_eq!(
+            real_use(&p, DAY).unwrap(),
+            "Typing for real: 10 min this week · 30 WPM · 10% corrected"
+        );
+        assert_eq!(
+            real_use(&p, 20 * DAY).unwrap(),
+            "Typing for real: none this week (lately 30 WPM · 10% corrected)"
+        );
+        p.freestyle.push(run(20 * DAY, 40.0, 96.0, 3000.0));
+        p.freestyle.push(run(20 * DAY + 1, 34.0, 94.0, 1500.0));
+        assert_eq!(
+            real_use(&p, 20 * DAY).unwrap(),
+            "Typing for real: 1h 15m this week · 38 WPM · 5% corrected · started at 30 WPM, 10%"
+        );
     }
 }

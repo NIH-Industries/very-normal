@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use very_normal::app::{App, Phase};
+use very_normal::compose::{self, Action, Composer, Screen};
 use very_normal::layout;
 use very_normal::optimise::{self, Options};
 use very_normal::store::{self, Progress};
@@ -40,6 +41,10 @@ usage: very-normal                  a guided session: layout, warm-up, practice
                                     (karabiner: built-in keyboard only, unless --all-keyboards)
        very-normal charts [file] [--no-open]
                                     write your progress as a page of charts and open it
+       very-normal compose [--to <pane>] [-- <command>]
+                                    type for real and still have it count: write a
+                                    message in this rex pane and ctrl-enter sends it
+                                    to another (-- claude starts claude above this one)
        very-normal export           print your progress as JSON
        very-normal --help | --version
 
@@ -264,6 +269,7 @@ fn main() -> Result<()> {
                 very_normal::open_url(&out.display().to_string())?;
             }
         }
+        ["compose", rest @ ..] => compose(rest, &path)?,
         ["export"] => println!("{}", serde_json::to_string_pretty(&Progress::load(&path)?)?),
         _ => {
             eprint!("{HELP}");
@@ -485,6 +491,218 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
         {
             app.handle_key(key, Instant::now());
         }
+    }
+    Ok(())
+}
+
+/// Compose mode: this rex pane is where you type, and each message goes to
+/// another pane, while the typing is measured. The text is never saved.
+fn compose(args: &[&str], path: &std::path::Path) -> Result<()> {
+    let (Ok(session), Ok(me)) = (std::env::var("REX_SESSION"), std::env::var("REX_BLOCK")) else {
+        bail!("compose sends what you type to another rex pane, so run it inside rex");
+    };
+    let usage = "usage: very-normal compose [--to <pane>] [-- <command>...]";
+    let mut to = None;
+    let mut command: &[&str] = &[];
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--to" => {
+                to = Some(*args.get(i + 1).context(usage)?);
+                i += 2;
+            }
+            "--" => {
+                command = &args[i + 1..];
+                break;
+            }
+            _ => bail!("{usage}"),
+        }
+    }
+    let (target, label) = if let Some(program) = command.first() {
+        let cwd = std::env::current_dir()?;
+        let mut rex_args: Vec<String> = [
+            "run",
+            "--split=above",
+            "--ratio",
+            "75",
+            "--focus=false",
+            "--json",
+            "-s",
+            &session,
+            "-b",
+            &me,
+            "--label",
+            program,
+            "-c",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        rex_args.push(cwd.display().to_string());
+        rex_args.push("--".into());
+        rex_args.extend(command.iter().map(|s| s.to_string()));
+        let made = rex_json(&rex_args)?;
+        let id = made["block_ids"][0]
+            .as_str()
+            .context("rex didn't say which pane it made")?;
+        (id.to_string(), program.to_string())
+    } else {
+        let listed = rex_json(&["block", "ls", "--json", "-s", &session].map(String::from))?;
+        let blocks = listed["blocks"].as_array().cloned().unwrap_or_default();
+        let field = |b: &serde_json::Value, k: &str| b[k].as_str().unwrap_or("").to_string();
+        let window = blocks
+            .iter()
+            .find(|b| field(b, "block_id") == me)
+            .map(|b| field(b, "window_id"));
+        let named = |b: &serde_json::Value| {
+            let l = field(b, "label");
+            if l.is_empty() {
+                field(b, "block_id")
+            } else {
+                l
+            }
+        };
+        match to {
+            Some(to) => {
+                let label = blocks
+                    .iter()
+                    .find(|b| field(b, "block_id") == to || field(b, "block_id").ends_with(to))
+                    .map_or(to.to_string(), named);
+                (to.to_string(), label)
+            }
+            None => {
+                let others: Vec<&serde_json::Value> = blocks
+                    .iter()
+                    .filter(|b| field(b, "block_id") != me)
+                    .filter(|b| window.is_none() || Some(field(b, "window_id")) == window)
+                    .collect();
+                match others.as_slice() {
+                    [one] => (field(one, "block_id"), named(one)),
+                    [] => bail!(
+                        "there's no other pane in this window to send to: start one with `very-normal compose -- claude`"
+                    ),
+                    many => {
+                        let list: Vec<String> = many
+                            .iter()
+                            .map(|b| format!("  {}  {}", field(b, "block_id"), field(b, "label")))
+                            .collect();
+                        bail!("which pane? pick one with --to:\n{}", list.join("\n"))
+                    }
+                }
+            }
+        }
+    };
+
+    let progress = Progress::load(path)?;
+    let stage = progress.stage;
+    // ctrl-enter only reaches the app when the terminal reports modifiers on
+    // enter (the kitty keyboard protocol, which Rex speaks)
+    let enhanced = ratatui::crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+    let send_key = if enhanced { "ctrl-enter" } else { "alt-enter" };
+    let mut screen = Screen::new(
+        Composer::new(compose::usual(&progress.freestyle)),
+        label,
+        send_key,
+    );
+    let mut saved = Vec::new();
+    let mut terminal = ratatui::init();
+    if enhanced {
+        ratatui::crossterm::execute!(
+            std::io::stdout(),
+            event::PushKeyboardEnhancementFlags(
+                event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            )
+        )?;
+    }
+    let result = (|| -> Result<()> {
+        loop {
+            terminal.draw(|frame| screen.render(frame))?;
+            if event::poll(Duration::from_millis(250))?
+                && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press
+            {
+                match screen.handle_key(key, Instant::now()) {
+                    Action::None => {}
+                    Action::Quit => break,
+                    Action::Send(bytes) => {
+                        if let Err(e) = rex_send(&target, &bytes) {
+                            screen.problem = Some(format!("couldn't send: {e}"));
+                        }
+                    }
+                }
+            }
+            if screen.composer.due(Instant::now()) {
+                save_freestyle(&mut screen.composer, stage, path, &mut saved)?;
+            }
+        }
+        Ok(())
+    })();
+    if enhanced {
+        let _ = ratatui::crossterm::execute!(std::io::stdout(), event::PopKeyboardEnhancementFlags);
+    }
+    ratatui::restore();
+    save_freestyle(&mut screen.composer, stage, path, &mut saved)?;
+    result?;
+    let secs: f64 = saved.iter().map(|r: &store::Run| r.secs).sum();
+    if secs > 0.0 {
+        let wpm = saved.iter().map(|r| r.wpm * r.secs).sum::<f64>() / secs;
+        let corrected = saved.iter().map(|r| (100.0 - r.acc) * r.secs).sum::<f64>() / secs;
+        println!(
+            "Saved {:.0} min of real typing: {wpm:.0} WPM, {corrected:.0}% corrected.",
+            (secs / 60.0).ceil()
+        );
+    }
+    Ok(())
+}
+
+/// Saves the typing since the last save as a compose run, if there's enough.
+fn save_freestyle(
+    composer: &mut Composer,
+    stage: usize,
+    path: &std::path::Path,
+    saved: &mut Vec<store::Run>,
+) -> Result<()> {
+    if let Some(run) = composer.take_run(stage, now_ms()?) {
+        // load fresh, so a drill finished in another pane meanwhile is kept
+        let mut p = Progress::load(path)?;
+        p.record_freestyle(run.clone());
+        p.save(path)?;
+        saved.push(run);
+    }
+    Ok(())
+}
+
+fn rex_json(args: &[String]) -> Result<serde_json::Value> {
+    let out = std::process::Command::new("rex")
+        .args(args)
+        .output()
+        .context("running rex")?;
+    if !out.status.success() {
+        bail!(
+            "rex {}: {}",
+            args[0],
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    serde_json::from_slice(&out.stdout).context("reading what rex said")
+}
+
+fn rex_send(block: &str, bytes: &[u8]) -> Result<()> {
+    let mut child = std::process::Command::new("rex")
+        .args(["send", "-b", block])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("running rex")?;
+    child
+        .stdin
+        .take()
+        .context("rex's input")?
+        .write_all(bytes)?;
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(())
 }

@@ -209,6 +209,36 @@ weeks"), not dates.
   three restarts in ten minutes), it suggests a break. That's usually
   frustration or tired fingers, not you getting worse.
 
+## Typing for real
+
+Drills only get you so far: the layout sticks when you use it for real. Inside
+Rex, `very-normal compose -- claude` starts Claude Code in a pane above and
+turns this one into a small compose box. Type your message there, with
+`enter` for a newline, and `ctrl-enter` (or `alt-enter`) sends it to Claude
+whole, as a single paste. There's no lag while you type.
+
+- `ctrl-w` and `alt-backspace` delete a word, and `ctrl-u` throws the message
+  away.
+- With nothing typed, `esc` and the arrows go straight to the other pane, so
+  you can interrupt Claude or scroll its history. Nothing else goes through,
+  and a plain `enter` never sends. To answer Claude's questions (permissions,
+  menus), click into its pane. That's also where to type anything you'd
+  rather wasn't measured, or to take a break on your old layout.
+- `very-normal compose --to <pane>` composes into a pane that's already open.
+  With no `--to` and one other pane in the window, it uses that one.
+
+Every press of a delete key counts as a correction, and the character you
+type in its place shows in yellow. The status row shows your speed (counting
+only time spent typing, not pauses to think) and how much you corrected. If
+corrections pile up well past your usual, or you've typed for 50 minutes
+straight, the status row suggests a break. It changes colour in place, so
+nothing moves while you type.
+
+What you type is never saved. Only per-key timings and counts are kept, as
+compose runs that sit apart from your drills. The gate, the coach and the
+weak-key drills never see them. The dashboard sums them up in one line: time
+spent this week, speed, how much you corrected, and where you started.
+
 ## Charts
 
 `very-normal charts` (or `g` on the dashboard) writes
