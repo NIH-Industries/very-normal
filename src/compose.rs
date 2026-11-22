@@ -18,14 +18,16 @@ use crate::store::{LetterStat, Run};
 /// A gap between keys longer than this is thinking, not typing: it counts
 /// this much towards flow time and isn't used to time the key.
 pub const GAP_CAP: Duration = Duration::from_secs(2);
-/// The last this-many keys (typed or deleting) decide the nudge.
-pub const WINDOW: usize = 150;
+/// The last this-many keys (typed or deleting) decide the nudge. Long enough
+/// that rewording one sentence doesn't swamp it.
+pub const WINDOW: usize = 300;
 /// The nudge waits for this many keys in the window.
-pub const NUDGE_MIN_KEYS: usize = 80;
-/// Corrections (as a % of keys) below this never nudge, however tidy you usually are.
-pub const NUDGE_FLOOR: f64 = 10.0;
+pub const NUDGE_MIN_KEYS: usize = 150;
+/// Corrections (as a % of keys) below this never nudge, however tidy you usually
+/// are. Compose deletes are as often a change of mind as a slip, so it's high.
+pub const NUDGE_FLOOR: f64 = 20.0;
 /// How far over your usual correction rate counts as a rough patch.
-pub const NUDGE_FACTOR: f64 = 1.5;
+pub const NUDGE_FACTOR: f64 = 2.0;
 /// Flow minutes in one sitting before suggesting a stretch.
 pub const STRETCH_MINUTES: f64 = 50.0;
 /// A pause this long ends a sitting.
@@ -365,7 +367,11 @@ impl Screen {
         };
         // the terminal's own cursor, so there's only ever one, in the terminal's style
         let row = lines.len().saturating_sub(1);
-        let col = if self.composer.is_empty() { 0 } else { lines[row].width() };
+        let col = if self.composer.is_empty() {
+            0
+        } else {
+            lines[row].width()
+        };
         frame.set_cursor_position((text_area.x + col as u16, text_area.y + row as u16));
         frame.render_widget(Paragraph::new(lines), text_area);
 
@@ -547,7 +553,7 @@ mod tests {
         let t = Instant::now();
         let mut c = Composer::new(Some(4.0));
         let mut ms = 0;
-        for i in 0..100 {
+        for i in 0..200 {
             ms += 150;
             c.type_char('a', at(t, ms));
             if i % 10 == 0 {
@@ -555,9 +561,9 @@ mod tests {
                 c.delete_char(at(t, ms));
             }
         }
-        // 10 in 110 is under the 10% floor
+        // 20 in 220 is under the 20% floor
         assert_eq!(c.nudge(), None);
-        for _ in 0..10 {
+        for _ in 0..50 {
             ms += 150;
             c.delete_char(at(t, ms));
             ms += 150;
@@ -566,6 +572,26 @@ mod tests {
         assert_eq!(c.nudge(), Some(Nudge::RoughPatch));
         // someone who usually corrects a lot isn't nagged for it
         c.usual = Some(15.0);
+        assert_eq!(c.nudge(), None);
+    }
+
+    #[test]
+    fn rewording_a_sentence_is_not_a_rough_patch() {
+        let t = Instant::now();
+        let mut c = Composer::new(None);
+        let mut ms = 0;
+        for _ in 0..150 {
+            ms += 150;
+            c.type_char('a', at(t, ms));
+        }
+        for _ in 0..40 {
+            ms += 100;
+            c.delete_char(at(t, ms));
+        }
+        for _ in 0..40 {
+            ms += 150;
+            c.type_char('b', at(t, ms));
+        }
         assert_eq!(c.nudge(), None);
     }
 
