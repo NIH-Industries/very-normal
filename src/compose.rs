@@ -349,7 +349,7 @@ impl Screen {
         let dim = Style::new().fg(Color::DarkGray);
         let lines = if self.composer.is_empty() {
             vec![Line::from(vec![
-                Span::styled(" ", Style::new().add_modifier(Modifier::REVERSED)),
+                Span::raw(" "),
                 Span::styled(
                     format!(
                         " type a message · {} sends it to {} · with nothing typed, esc and the arrows go straight there",
@@ -363,6 +363,10 @@ impl Screen {
             let skip = all.len().saturating_sub(text_area.height as usize);
             all.into_iter().skip(skip).collect()
         };
+        // the terminal's own cursor, so there's only ever one, in the terminal's style
+        let row = lines.len().saturating_sub(1);
+        let col = if self.composer.is_empty() { 0 } else { lines[row].width() };
+        frame.set_cursor_position((text_area.x + col as u16, text_area.y + row as u16));
         frame.render_widget(Paragraph::new(lines), text_area);
 
         let mut spans = vec![Span::styled(
@@ -393,7 +397,8 @@ impl Screen {
     }
 }
 
-/// The message as screen lines, corrections in yellow, ending with the cursor.
+/// The message as screen lines, corrections in yellow. The last line always
+/// has room for the cursor after it.
 fn wrapped(text: &[(char, bool)], width: usize) -> Vec<Line<'static>> {
     let fixed = Style::new().fg(Color::Yellow);
     let mut lines = vec![];
@@ -417,10 +422,6 @@ fn wrapped(text: &[(char, bool)], width: usize) -> Vec<Line<'static>> {
     if col == width {
         lines.push(Line::from(std::mem::take(&mut line)));
     }
-    line.push(Span::styled(
-        " ",
-        Style::new().add_modifier(Modifier::REVERSED),
-    ));
     lines.push(Line::from(line));
     lines
 }
@@ -696,10 +697,32 @@ mod tests {
     }
 
     #[test]
+    fn the_terminal_cursor_sits_where_the_next_character_goes() {
+        use ratatui::{Terminal, backend::TestBackend, layout::Position};
+        let t = Instant::now();
+        let mut s = Screen::new(Composer::new(None), "claude".into(), "ctrl-enter");
+        let mut term = Terminal::new(TestBackend::new(60, 4)).unwrap();
+        let mut at = |s: &Screen| {
+            term.draw(|f| s.render(f)).unwrap();
+            term.get_cursor_position().unwrap()
+        };
+        assert_eq!(at(&s), Position::new(0, 0));
+        for c in "ab".chars() {
+            s.handle_key(key(KeyCode::Char(c)), t);
+        }
+        assert_eq!(at(&s), Position::new(2, 0));
+        s.handle_key(key(KeyCode::Enter), t);
+        assert_eq!(at(&s), Position::new(0, 1));
+        // no drawn cursor beside it to make it look double width
+        let screen = draw(&s);
+        assert!(screen.lines().nth(1).unwrap().trim().is_empty());
+    }
+
+    #[test]
     fn long_messages_wrap_and_keep_the_end_in_view() {
         let text: Vec<(char, bool)> = "abcdefgh\nij".chars().map(|c| (c, false)).collect();
         let lines = wrapped(&text, 4);
         let shown: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        assert_eq!(shown, ["abcd", "efgh", "ij "]);
+        assert_eq!(shown, ["abcd", "efgh", "ij"]);
     }
 }
