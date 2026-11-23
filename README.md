@@ -243,25 +243,33 @@ spent this week, speed, how much you corrected, and where you started.
 ### Anywhere on a Mac
 
 Very Normal Compose is a small floating window that does the same for any
-app, Rex or not. It types into whichever app you were in when it opened (or
-whichever you click into while it's open, since it never takes the focus
-away from that app): `ctrl-enter` pastes the message there and presses
-Return, `ctrl-shift-enter` pastes without pressing Return, and `esc` or
-`ctrl-c` closes it. The keys are the compose pane's, and `cmd-backspace`
-clears too. Drag it anywhere; it remembers where. It counts into the same
-profile as everything else, through `very-normal compose --stdio`.
+app, Rex or not. It lives in the menu bar, and **hyper-c**
+(ctrl-opt-cmd-shift-c: put a Hyper key on your keyboard in Oryx, or on caps
+lock with Karabiner) opens and closes it from anywhere. It types into
+whichever app you were in when it opened (or whichever you click into while
+it's open, since it never takes the focus away from that app):
+
+- `ctrl-enter` pastes the message there and presses Return, and
+  `ctrl-shift-enter` pastes without pressing Return. The window stays open
+  for the next one.
+- `esc`, `ctrl-c`, `cmd-w` or hyper-c again closes it, and the run is saved.
+- The other keys are the compose pane's, and `cmd-backspace` clears too.
+- Drag it anywhere; it remembers where. Its menu bar menu has Open at Login,
+  and Quit.
+
+It counts into the same profile as everything else, through
+`very-normal compose --stdio`.
 
 Build it from a checkout with `mac/build --install`, which puts it in
-`~/Applications`, then open it with Spotlight or a hotkey from the app you
-want to type into. The first time, macOS asks you to allow it under
-Privacy & Security › Accessibility, so it can press ⌘V and Return for you;
-open it again after allowing it. It sends via the clipboard and puts back
+`~/Applications`, then open it once with Spotlight. The first time, macOS
+asks you to allow it under Privacy & Security › Accessibility, so it can
+press ⌘V and Return for you. It sends via the clipboard and puts back
 what was there. The copy stays on this Mac (no Universal Clipboard) and is
 marked transient, so clipboard history apps that honour nspasteboard.org
-(Raycast, Alfred, Maccy, Paste) don't keep it. It looks for very-normal in `~/.local/bin`, `~/.cargo/bin`
-and Homebrew, then on your login shell's PATH (`$VERY_NORMAL_BIN` overrides).
-`open -a "Very Normal Compose" --args --profile <name>` counts into another
-profile.
+(Raycast, Alfred, Maccy, Paste) don't keep it. It looks for very-normal in
+`~/.local/bin`, `~/.cargo/bin` and Homebrew, then on your login shell's PATH
+(`$VERY_NORMAL_BIN` overrides). `open -a "Very Normal Compose" --args
+--profile <name>` counts into another profile.
 
 ## Charts
 

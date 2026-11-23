@@ -1,15 +1,20 @@
 // Very Normal Compose: a small floating window to type in, measured by
-// very-normal. Each message is pasted into the app you were using (the one in
-// front when the window opened, or whichever you've clicked into since) and
-// Return is pressed for you. The window doesn't take focus away from that app:
-// it's a non-activating panel, like Spotlight's.
+// very-normal. It lives in the menu bar, and hyper-c (ctrl-opt-cmd-shift-c)
+// opens and closes the window from anywhere. Each message is pasted into the
+// app you were using (the one in front when the window opened, or whichever
+// you've clicked into since) and Return is pressed for you. The window
+// doesn't take focus away from that app: it's a non-activating panel, like
+// Spotlight's.
 //
-// All the counting happens in `very-normal compose --stdio`: this sends it
-// each key as a line of JSON and draws what comes back. The text is never
-// saved anywhere.
+// All the counting happens in `very-normal compose --stdio`, started each
+// time the window opens and closed (so the run is saved) when it closes:
+// this sends it each key as a line of JSON and draws what comes back. The
+// text is never saved anywhere.
 
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
+import ServiceManagement
 
 // MARK: - very-normal
 
@@ -64,6 +69,7 @@ final class Engine {
 
     /// Closes stdin, so very-normal saves what's left, and waits for it.
     func finish() {
+        output.fileHandleForReading.readabilityHandler = nil
         try? input.fileHandleForWriting.close()
         let deadline = Date().addingTimeInterval(5)
         while process.isRunning && Date() < deadline {
@@ -155,6 +161,33 @@ enum Deliver {
     }
 }
 
+// MARK: - Hotkey
+
+/// A system-wide hotkey through Carbon, which needs no permission and swallows
+/// the key so it doesn't also type into the app in front.
+final class Hotkey {
+    private var ref: EventHotKeyRef?
+    private static var action: (() -> Void)?
+
+    /// hyper-c: ctrl, option, command and shift, with c.
+    static let label = "hyper-c"
+
+    /// Whether the hotkey could be had (something else may hold it).
+    let registered: Bool
+
+    init(action: @escaping () -> Void) {
+        Hotkey.action = action
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
+            DispatchQueue.main.async { Hotkey.action?() }
+            return noErr
+        }, 1, &spec, nil, nil)
+        let id = EventHotKeyID(signature: OSType(0x766E_636F), id: 1) // "vnco"
+        let mods = UInt32(controlKey | optionKey | cmdKey | shiftKey)
+        registered = RegisterEventHotKey(UInt32(kVK_ANSI_C), mods, id, GetApplicationEventTarget(), 0, &ref) == noErr
+    }
+}
+
 // MARK: - Window
 
 /// A panel that takes keys without making this app the active one, so the
@@ -191,24 +224,109 @@ final class Compose: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var problem: String?
     private let font = NSFont.monospacedSystemFont(ofSize: 15, weight: .regular)
     private let small = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    private var item: NSStatusItem!
+    private var hotkey: Hotkey!
+    private let me = NSRunningApplication.current
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        let me = NSRunningApplication.current
-        if let front = NSWorkspace.shared.frontmostApplication, front != me { target = front }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  app != me else { return }
+                  app != NSRunningApplication.current else { return }
             self?.target = app
             self?.render()
         }
         build()
-        start()
-        if !Deliver.allowed(prompt: true) {
-            problem = "allow Very Normal Compose in System Settings › Privacy & Security › Accessibility, then reopen it"
+        hotkey = Hotkey { [weak self] in self?.toggle() }
+        menu()
+        _ = Deliver.allowed(prompt: true)
+        // opened by hand (Spotlight, Finder), not at login: show the window
+        if !launchedAtLogin { show() }
+    }
+
+    /// macOS opens login items with a reopen-style launch event that a
+    /// person's double-click doesn't have.
+    private var launchedAtLogin: Bool {
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        return event?.eventID == kAEOpenApplication
+            && event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+    }
+
+    // MARK: menu bar
+
+    private func menu() {
+        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        let image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "Very Normal Compose")
+        image?.isTemplate = true
+        item.button?.image = image
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let compose = NSMenuItem(title: "Compose", action: #selector(toggle), keyEquivalent: "c")
+        compose.keyEquivalentModifierMask = [.control, .option, .command, .shift]
+        compose.target = self
+        menu.addItem(compose)
+        if !hotkey.registered {
+            let taken = NSMenuItem(title: "\(Hotkey.label) is taken by another app", action: nil, keyEquivalent: "")
+            taken.isEnabled = false
+            menu.addItem(taken)
+        }
+        menu.addItem(.separator())
+        let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLogin(_:)), keyEquivalent: "")
+        login.target = self
+        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(login)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "Quit Very Normal Compose", action: #selector(quitApp), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
+        item.menu = menu
+    }
+
+    @objc private func toggleLogin(_ sender: NSMenuItem) {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+            } else {
+                try service.register()
+            }
+        } catch {
+            NSSound.beep()
+        }
+        sender.state = service.status == .enabled ? .on : .off
+    }
+
+    @objc private func quitApp() {
+        hide()
+        NSApp.terminate(nil)
+    }
+
+    // MARK: showing and hiding
+
+    @objc private func toggle() {
+        panel.isVisible ? hide() : show()
+    }
+
+    /// Opens the window for the app in front, with a fresh very-normal behind it.
+    private func show() {
+        if let front = NSWorkspace.shared.frontmostApplication, front != me { target = front }
+        state = nil
+        problem = nil
+        if engine?.running != true { start() }
+        if problem == nil && !Deliver.allowed(prompt: false) {
+            problem = "allow Very Normal Compose in System Settings › Privacy & Security › Accessibility"
         }
         render()
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(panel.contentView)
+    }
+
+    /// Closes the window; very-normal saves the run as it stops.
+    private func hide() {
+        panel.orderOut(nil)
+        engine?.finish()
+        engine = nil
     }
 
     private func start() {
@@ -275,8 +393,6 @@ final class Compose: NSObject, NSApplicationDelegate, NSWindowDelegate {
             status.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -8),
         ])
         panel.contentView = root
-        panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(root)
     }
 
     // MARK: keys
@@ -288,7 +404,7 @@ final class Compose: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let plain = event.charactersIgnoringModifiers ?? ""
         problem = nil
         switch event.keyCode {
-        case 53: return quit() // esc
+        case 53: return hide() // esc
         case 36, 76: // return, enter
             if ctrl || alt || cmd {
                 engine?.send(["k": "send"])
@@ -309,7 +425,7 @@ final class Compose: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if ctrl {
             switch plain {
-            case "c": quit()
+            case "c": hide()
             case "w": engine?.send(["k": "word"])
             case "u": engine?.send(["k": "clear"])
             case "j": engine?.send(["k": "char", "c": "\n"])
@@ -318,7 +434,8 @@ final class Compose: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
         if cmd {
-            if plain == "q" || plain == "w" { quit() }
+            if plain == "w" { hide() }
+            if plain == "q" { quitApp() }
             return
         }
         for scalar in (event.characters ?? "").unicodeScalars
@@ -377,7 +494,7 @@ final class Compose: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let pct = state?.corrected.map { String(format: "%.0f%%", $0) } ?? "–"
             line.append(NSAttributedString(string: "  \(wpm) wpm · \(pct) corrected", attributes: [.font: small, .foregroundColor: NSColor.labelColor]))
         }
-        line.append(NSAttributedString(string: "  ·  ctrl-enter send · ctrl-shift-enter paste only · esc close", attributes: gray))
+        line.append(NSAttributedString(string: "  ·  ctrl-enter send · ctrl-shift-enter paste only · esc or \(Hotkey.label) close", attributes: gray))
         status.attributedStringValue = line
     }
 
@@ -385,16 +502,16 @@ final class Compose: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: closing
 
-    private func quit() {
-        engine?.finish()
-        NSApp.terminate(nil)
+    /// The close button hides the window, like esc; Quit is in the menu.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        hide()
+        return false
     }
 
-    func windowWillClose(_ notification: Notification) { quit() }
-
+    /// Opened again from Spotlight or Finder while already running.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        panel.makeKeyAndOrderFront(nil)
-        return true
+        show()
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) { engine?.finish() }
