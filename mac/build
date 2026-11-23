@@ -10,6 +10,15 @@ app="tmp/mac/Very Normal Compose.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
 cp mac/Info.plist "$app/Contents/Info.plist"
+# the icon, drawn by mac/icon.swift
+set_dir="tmp/mac/AppIcon.iconset"
+rm -rf "$set_dir" && mkdir -p "$set_dir" "$app/Contents/Resources"
+swift mac/icon.swift tmp/mac/icon.png
+for n in 16 32 128 256 512; do
+  sips -z $n $n tmp/mac/icon.png --out "$set_dir/icon_${n}x${n}.png" >/dev/null
+  sips -z $((n * 2)) $((n * 2)) tmp/mac/icon.png --out "$set_dir/icon_${n}x${n}@2x.png" >/dev/null
+done
+iconutil -c icns "$set_dir" -o "$app/Contents/Resources/AppIcon.icns"
 swiftc -O -swift-version 5 -target arm64-apple-macos14.0 \
   -o "$app/Contents/MacOS/VeryNormalCompose" mac/main.swift
 identity="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \

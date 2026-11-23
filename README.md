@@ -256,7 +256,9 @@ Build it from a checkout with `mac/build --install`, which puts it in
 want to type into. The first time, macOS asks you to allow it under
 Privacy & Security › Accessibility, so it can press ⌘V and Return for you;
 open it again after allowing it. It sends via the clipboard and puts back
-what was there. It looks for very-normal in `~/.local/bin`, `~/.cargo/bin`
+what was there. The copy stays on this Mac (no Universal Clipboard) and is
+marked transient, so clipboard history apps that honour nspasteboard.org
+(Raycast, Alfred, Maccy, Paste) don't keep it. It looks for very-normal in `~/.local/bin`, `~/.cargo/bin`
 and Homebrew, then on your login shell's PATH (`$VERY_NORMAL_BIN` overrides).
 `open -a "Very Normal Compose" --args --profile <name>` counts into another
 profile.
