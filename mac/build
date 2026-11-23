@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Builds Very Normal Compose.app into tmp/mac/, and with --install copies it
+# to ~/Applications. Signs it with your Apple Development certificate when
+# there is one ($CODESIGN_IDENTITY picks another), so the Accessibility
+# permission survives a rebuild; an ad-hoc signature has to be allowed again
+# after every build.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+app="tmp/mac/Very Normal Compose.app"
+rm -rf "$app"
+mkdir -p "$app/Contents/MacOS"
+cp mac/Info.plist "$app/Contents/Info.plist"
+swiftc -O -swift-version 5 -target arm64-apple-macos14.0 \
+  -o "$app/Contents/MacOS/VeryNormalCompose" mac/main.swift
+identity="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \
+  | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -1)}"
+codesign --force --sign "${identity:--}" "$app"
+echo "Built $app (signed: ${identity:-ad-hoc})"
+if [[ "${1:-}" == "--install" ]]; then
+  pkill -x VeryNormalCompose 2>/dev/null || true
+  rm -rf "$HOME/Applications/Very Normal Compose.app"
+  mkdir -p "$HOME/Applications"
+  cp -R "$app" "$HOME/Applications/"
+  echo "Installed to ~/Applications/Very Normal Compose.app"
+fi

@@ -218,7 +218,8 @@ turns this one into a small compose box. Type your message there, with
 whole, as a single paste. There's no lag while you type.
 
 - `ctrl-w` and `alt-backspace` delete a word, and `ctrl-u` throws the message
-  away.
+  away. Neither is a mistake: a deleted word is a change of mind, and it comes
+  out of your stats as if you never typed it.
 - With nothing typed, `esc` and the arrows go straight to the other pane, so
   you can interrupt Claude or scroll its history. Nothing else goes through,
   and a plain `enter` never sends. To answer Claude's questions (permissions,
@@ -227,7 +228,7 @@ whole, as a single paste. There's no lag while you type.
 - `very-normal compose --to <pane>` composes into a pane that's already open.
   With no `--to` and one other pane in the window, it uses that one.
 
-Every press of a delete key counts as a correction, and the character you
+Every press of backspace counts as a correction, and the character you
 type in its place shows in yellow. The status row shows your speed (counting
 only time spent typing, not pauses to think) and how much you corrected. If
 corrections pile up well past your usual, or you've typed for 50 minutes
@@ -238,6 +239,27 @@ What you type is never saved. Only per-key timings and counts are kept, as
 compose runs that sit apart from your drills. The gate, the coach and the
 weak-key drills never see them. The dashboard sums them up in one line: time
 spent this week, speed, how much you corrected, and where you started.
+
+### Anywhere on a Mac
+
+Very Normal Compose is a small floating window that does the same for any
+app, Rex or not. It types into whichever app you were in when it opened (or
+whichever you click into while it's open, since it never takes the focus
+away from that app): `ctrl-enter` pastes the message there and presses
+Return, `ctrl-shift-enter` pastes without pressing Return, and `esc` or
+`ctrl-c` closes it. The keys are the compose pane's, and `cmd-backspace`
+clears too. Drag it anywhere; it remembers where. It counts into the same
+profile as everything else, through `very-normal compose --stdio`.
+
+Build it from a checkout with `mac/build --install`, which puts it in
+`~/Applications`, then open it with Spotlight or a hotkey from the app you
+want to type into. The first time, macOS asks you to allow it under
+Privacy & Security › Accessibility, so it can press ⌘V and Return for you;
+open it again after allowing it. It sends via the clipboard and puts back
+what was there. It looks for very-normal in `~/.local/bin`, `~/.cargo/bin`
+and Homebrew, then on your login shell's PATH (`$VERY_NORMAL_BIN` overrides).
+`open -a "Very Normal Compose" --args --profile <name>` counts into another
+profile.
 
 ## Charts
 

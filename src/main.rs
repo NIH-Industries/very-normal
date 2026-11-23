@@ -45,6 +45,8 @@ usage: very-normal                  a guided session: layout, warm-up, practice
                                     type for real and still have it count: write a
                                     message in this rex pane and ctrl-enter sends it
                                     to another (-- claude starts claude above this one)
+       very-normal compose --stdio  the same, for a window that draws itself (the Mac
+                                    compose window): keys as JSON lines in, what to show out
        very-normal export           print your progress as JSON
        very-normal --help | --version
 
@@ -498,10 +500,13 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
 /// Compose mode: this rex pane is where you type, and each message goes to
 /// another pane, while the typing is measured. The text is never saved.
 fn compose(args: &[&str], path: &std::path::Path) -> Result<()> {
+    if args == ["--stdio"] {
+        return compose_stdio(path);
+    }
     let (Ok(session), Ok(me)) = (std::env::var("REX_SESSION"), std::env::var("REX_BLOCK")) else {
         bail!("compose sends what you type to another rex pane, so run it inside rex");
     };
-    let usage = "usage: very-normal compose [--to <pane>] [-- <command>...]";
+    let usage = "usage: very-normal compose [--to <pane>] [-- <command>...] | --stdio";
     let mut to = None;
     let mut command: &[&str] = &[];
     let mut i = 0;
@@ -652,6 +657,48 @@ fn compose(args: &[&str], path: &std::path::Path) -> Result<()> {
             (secs / 60.0).ceil()
         );
     }
+    Ok(())
+}
+
+/// Compose for a window that does its own drawing (the Mac compose window):
+/// a key as a line of JSON on stdin, what to show as a line of JSON on stdout.
+/// Runs are saved as they fall due, and when stdin closes.
+fn compose_stdio(path: &std::path::Path) -> Result<()> {
+    let progress = Progress::load(path)?;
+    let stage = progress.stage;
+    let mut composer = Composer::new(compose::usual(&progress.freestyle));
+    let mut saved = Vec::new();
+    let (keys, lines) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            if keys.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut out = std::io::stdout().lock();
+    let mut show = |state: &compose::State| -> Result<()> {
+        writeln!(out, "{}", serde_json::to_string(state)?)?;
+        out.flush()?;
+        Ok(())
+    };
+    show(&composer.state())?;
+    loop {
+        match lines.recv_timeout(Duration::from_millis(250)) {
+            Ok(line) if line.trim().is_empty() => {}
+            Ok(line) => match serde_json::from_str::<compose::Input>(&line) {
+                Ok(input) => show(&composer.apply(input, Instant::now()))?,
+                Err(e) => eprintln!("very-normal compose: didn't understand {line:?}: {e}"),
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if composer.due(Instant::now()) {
+            save_freestyle(&mut composer, stage, path, &mut saved)?;
+        }
+    }
+    save_freestyle(&mut composer, stage, path, &mut saved)?;
     Ok(())
 }
 

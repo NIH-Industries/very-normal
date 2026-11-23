@@ -1,7 +1,9 @@
 //! Compose mode: type a whole message in a small pane and send it to another
 //! one (Claude, mostly), measuring the typing as you go. A mistake is a press
-//! of a delete key. The text itself only ever lives in memory: nothing here
-//! writes it anywhere, and a run keeps only per-key timings and counts.
+//! of backspace; deleting a whole word is a change of mind, and the word is
+//! taken back as if it was never typed. The text itself only ever lives in
+//! memory: nothing here writes it anywhere, and a run keeps only per-key
+//! timings and counts.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -12,6 +14,7 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use serde::{Deserialize, Serialize};
 
 use crate::store::{LetterStat, Run};
 
@@ -71,10 +74,28 @@ struct Chunk {
     typos: BTreeMap<String, u64>,
 }
 
+/// A character in the message, with what typing it added to the stats, so a
+/// deleted word can take it all back.
+#[derive(Debug, Clone)]
+struct Key {
+    c: char,
+    /// Typed in place of a deleted character.
+    fixed: bool,
+    /// Its place in `recent`.
+    seq: u64,
+    /// Which chunk it was counted in.
+    chunk: u64,
+    flow: Duration,
+    /// The time it took, when it was timed.
+    timed: Option<Duration>,
+    /// The typo it was counted as, as "wanted>typed".
+    typo: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Composer {
-    /// The message so far, each character marked when it replaced a deleted one.
-    text: Vec<(char, bool)>,
+    /// The message so far.
+    text: Vec<Key>,
     /// Characters deleted since the last one typed, the most recent last: the
     /// next character typed goes where the last of these was.
     deleted: Vec<char>,
@@ -82,7 +103,11 @@ pub struct Composer {
     slip: bool,
     last_key: Option<Instant>,
     chunk: Chunk,
-    recent: VecDeque<bool>,
+    /// Counts chunks, so a deleted word only comes out of the one it's in.
+    chunk_no: u64,
+    /// Recent keys by number, and whether each was a correction.
+    recent: VecDeque<(u64, bool)>,
+    seq: u64,
     /// Since the composer opened, for the status line.
     keys: u64,
     corrections: u64,
@@ -101,8 +126,9 @@ impl Composer {
         }
     }
 
-    pub fn text(&self) -> &[(char, bool)] {
-        &self.text
+    /// The message, each character marked when it replaced a deleted one.
+    pub fn text(&self) -> Vec<(char, bool)> {
+        self.text.iter().map(|k| (k.c, k.fixed)).collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -110,8 +136,9 @@ impl Composer {
     }
 
     /// Times a key press: the gap since the last one, capped, added to flow
-    /// time. Returns the gap when it's short enough to time a key by.
-    fn tick(&mut self, now: Instant) -> Option<Duration> {
+    /// time. Returns the flow added, and the gap when it's short enough to
+    /// time a key by.
+    fn tick(&mut self, now: Instant) -> (Duration, Option<Duration>) {
         let gap = self.last_key.map(|t| now.saturating_duration_since(t));
         if gap.is_none_or(|g| g >= SITTING_GAP) {
             self.sitting = Duration::ZERO;
@@ -122,74 +149,126 @@ impl Composer {
         self.chunk.flow += flow;
         self.chunk.started.get_or_insert(now);
         self.last_key = Some(now);
-        gap.filter(|g| *g < GAP_CAP)
+        (flow, gap.filter(|g| *g < GAP_CAP))
     }
 
-    fn remember(&mut self, correction: bool) {
-        self.recent.push_back(correction);
+    fn remember(&mut self, correction: bool) -> u64 {
+        self.seq += 1;
+        self.recent.push_back((self.seq, correction));
         if self.recent.len() > WINDOW {
             self.recent.pop_front();
         }
+        self.seq
     }
 
     pub fn type_char(&mut self, c: char, now: Instant) {
-        let gap = self.tick(now);
+        let (flow, gap) = self.tick(now);
         self.keys += 1;
         self.net += 1;
         self.chunk.keys += 1;
         self.chunk.net += 1;
-        self.remember(false);
+        let seq = self.remember(false);
         let replaced = self.deleted.pop();
+        let mut typo = None;
         if let Some(old) = replaced
             && self.slip
             && old != c
             && !c.is_whitespace()
         {
-            *self.chunk.typos.entry(format!("{c}>{old}")).or_default() += 1;
+            let t = format!("{c}>{old}");
+            *self.chunk.typos.entry(t.clone()).or_default() += 1;
             self.chunk.letters.entry(c.to_string()).or_default().miss += 1;
+            typo = Some(t);
         }
-        if let Some(gap) = gap
-            && !c.is_whitespace()
-        {
+        let timed = gap.filter(|_| !c.is_whitespace());
+        if let Some(gap) = timed {
             let stat = self.chunk.letters.entry(c.to_string()).or_default();
             stat.n += 1;
             stat.ms += gap.as_secs_f64() * 1000.0;
         }
-        self.text.push((c, replaced.is_some()));
+        self.text.push(Key {
+            c,
+            fixed: replaced.is_some(),
+            seq,
+            chunk: self.chunk_no,
+            flow,
+            timed,
+            typo,
+        });
     }
 
-    fn correction(&mut self, now: Instant, removed: Vec<char>, slip: bool) {
-        self.tick(now);
-        self.corrections += 1;
-        self.chunk.corrections += 1;
-        let n = removed.len() as i64;
-        self.net -= n;
-        self.chunk.net -= n;
-        self.remember(true);
-        self.slip = slip && self.deleted.len() + removed.len() <= TYPO_BURST;
-        self.deleted.extend(removed);
+    /// Takes a typed character back out of the stats, as if it was never typed.
+    fn untype(&mut self, key: &Key) {
+        self.keys -= 1;
+        self.flow = self.flow.saturating_sub(key.flow);
+        self.recent.retain(|(seq, _)| *seq != key.seq);
+        if key.chunk != self.chunk_no {
+            return;
+        }
+        let chunk = &mut self.chunk;
+        chunk.keys -= 1;
+        chunk.flow = chunk.flow.saturating_sub(key.flow);
+        let name = key.c.to_string();
+        if let Some(stat) = chunk.letters.get_mut(&name) {
+            if let Some(gap) = key.timed {
+                stat.n -= 1;
+                stat.ms -= gap.as_secs_f64() * 1000.0;
+            }
+            if key.typo.is_some() {
+                stat.miss -= 1;
+            }
+            if stat.n == 0 && stat.miss == 0 {
+                chunk.letters.remove(&name);
+            }
+        }
+        if let Some(t) = &key.typo
+            && let Some(n) = chunk.typos.get_mut(t)
+        {
+            *n -= 1;
+            if *n == 0 {
+                chunk.typos.remove(t);
+            }
+        }
     }
 
     /// Backspace: one correction.
     pub fn delete_char(&mut self, now: Instant) {
-        let Some((c, _)) = self.text.pop() else {
+        let Some(key) = self.text.pop() else {
             return;
         };
-        self.correction(now, vec![c], true);
+        self.tick(now);
+        self.corrections += 1;
+        self.chunk.corrections += 1;
+        self.net -= 1;
+        self.chunk.net -= 1;
+        self.remember(true);
+        self.slip = self.deleted.len() < TYPO_BURST;
+        self.deleted.push(key.c);
     }
 
-    /// Ctrl-W or Alt-Backspace: back over any spaces, then the word. Still one correction.
+    /// Ctrl-W or Alt-Backspace: back over any spaces, then the word. That's a
+    /// change of mind, not a mistake: the word comes out of the stats as if it
+    /// was never typed, so it costs no speed and isn't a correction.
     pub fn delete_word(&mut self, now: Instant) {
         let mut removed = Vec::new();
-        while self.text.last().is_some_and(|(c, _)| c.is_whitespace()) {
-            removed.push(self.text.pop().unwrap().0);
+        while self.text.last().is_some_and(|k| k.c.is_whitespace()) {
+            removed.push(self.text.pop().unwrap());
         }
-        while self.text.last().is_some_and(|(c, _)| !c.is_whitespace()) {
-            removed.push(self.text.pop().unwrap().0);
+        while self.text.last().is_some_and(|k| !k.c.is_whitespace()) {
+            removed.push(self.text.pop().unwrap());
         }
-        if !removed.is_empty() {
-            self.correction(now, removed, false);
+        if removed.is_empty() {
+            return;
         }
+        for key in &removed {
+            self.untype(key);
+        }
+        self.net -= removed.len() as i64;
+        self.chunk.net -= removed.iter().filter(|k| k.chunk == self.chunk_no).count() as i64;
+        // the pause before rewording is thinking: it times nothing
+        self.last_key = Some(now);
+        self.deleted.clear();
+        self.slip = false;
     }
 
     /// Ctrl-U: throwing the message away is a choice, not a mistake.
@@ -206,7 +285,7 @@ impl Composer {
         self.deleted.clear();
         std::mem::take(&mut self.text)
             .into_iter()
-            .map(|(c, _)| c)
+            .map(|k| k.c)
             .collect()
     }
 
@@ -217,7 +296,7 @@ impl Composer {
 
     /// Corrections as a % of keys since the composer opened.
     pub fn corrected(&self) -> Option<f64> {
-        (self.keys > 0).then(|| 100.0 * self.corrections as f64 / self.keys as f64)
+        (self.keys > 0).then(|| (100.0 * self.corrections as f64 / self.keys as f64).min(100.0))
     }
 
     pub fn nudge(&self) -> Option<Nudge> {
@@ -227,8 +306,8 @@ impl Composer {
         if self.recent.len() < NUDGE_MIN_KEYS {
             return None;
         }
-        let rate =
-            100.0 * self.recent.iter().filter(|c| **c).count() as f64 / self.recent.len() as f64;
+        let rate = 100.0 * self.recent.iter().filter(|(_, c)| *c).count() as f64
+            / self.recent.len() as f64;
         let limit = NUDGE_FLOOR.max(self.usual.unwrap_or(0.0) * NUDGE_FACTOR);
         (rate > limit).then_some(Nudge::RoughPatch)
     }
@@ -244,12 +323,13 @@ impl Composer {
     /// it), starting the next one afresh either way.
     pub fn take_run(&mut self, stage: usize, t_ms: u64) -> Option<Run> {
         let c = std::mem::take(&mut self.chunk);
+        self.chunk_no += 1;
         (c.keys >= MIN_KEYS).then(|| Run {
             t: t_ms,
             stage,
             mode: MODE.into(),
             wpm: wpm(c.net, c.flow).unwrap_or(0.0),
-            acc: 100.0 * (1.0 - c.corrections as f64 / c.keys as f64),
+            acc: (100.0 * (1.0 - c.corrections as f64 / c.keys as f64)).max(0.0),
             secs: c.flow.as_secs_f64(),
             letters: c.letters,
             typos: c.typos,
@@ -276,6 +356,78 @@ pub fn paste(text: &str) -> Vec<u8> {
     out.extend_from_slice(text.as_bytes());
     out.extend_from_slice(b"\x1b[201~\r");
     out
+}
+
+/// One key from a window that does its own drawing, such as the Mac compose
+/// window: a line of JSON on stdin in `very-normal compose --stdio`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "k", rename_all = "lowercase")]
+pub enum Input {
+    Char { c: char },
+    Delete,
+    Word,
+    Clear,
+    Send,
+}
+
+/// A run of the message that's all fixed or all not.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Segment {
+    pub t: String,
+    pub fixed: bool,
+}
+
+/// What such a window shows, a line of JSON on stdout after every key.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct State {
+    pub segments: Vec<Segment>,
+    pub wpm: Option<f64>,
+    pub corrected: Option<f64>,
+    pub nudge: Option<&'static str>,
+    /// The message to send, when the key sent it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send: Option<String>,
+}
+
+impl Composer {
+    /// Applies a key from the window, and says what it should show now.
+    pub fn apply(&mut self, input: Input, now: Instant) -> State {
+        let mut send = None;
+        match input {
+            // a newline can't start a message, as in the pane
+            Input::Char { c: '\n' } if self.is_empty() => {}
+            Input::Char { c } => self.type_char(c, now),
+            Input::Delete => self.delete_char(now),
+            Input::Word => self.delete_word(now),
+            Input::Clear => self.clear(),
+            Input::Send if self.is_empty() => {}
+            Input::Send => send = Some(self.take()),
+        }
+        State {
+            send,
+            ..self.state()
+        }
+    }
+
+    pub fn state(&self) -> State {
+        let mut segments: Vec<Segment> = vec![];
+        for k in &self.text {
+            match segments.last_mut() {
+                Some(s) if s.fixed == k.fixed => s.t.push(k.c),
+                _ => segments.push(Segment {
+                    t: k.c.to_string(),
+                    fixed: k.fixed,
+                }),
+            }
+        }
+        State {
+            segments,
+            wpm: self.wpm(),
+            corrected: self.corrected(),
+            nudge: self.nudge().map(Nudge::message),
+            send: None,
+        }
+    }
 }
 
 /// What the screen wants done after a key.
@@ -361,7 +513,7 @@ impl Screen {
                 ),
             ])]
         } else {
-            let all = wrapped(self.composer.text(), text_area.width.max(2) as usize);
+            let all = wrapped(&self.composer.text(), text_area.width.max(2) as usize);
             let skip = all.len().saturating_sub(text_area.height as usize);
             all.into_iter().skip(skip).collect()
         };
@@ -478,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn every_delete_press_is_one_correction_and_slips_become_typos() {
+    fn every_backspace_is_one_correction_and_slips_become_typos() {
         let t = Instant::now();
         let mut c = Composer::new(None);
         let mut ms = 0;
@@ -503,13 +655,119 @@ mod tests {
         assert_eq!(run.mode, "compose");
         assert_eq!(run.stage, 2);
         assert_eq!(run.t, 42);
-        // 31 characters typed, 2 delete presses
-        assert!((run.acc - 100.0 * (1.0 - 2.0 / 31.0)).abs() < 1e-9);
+        // 31 characters typed, less the 5 of "again" taken back; 1 backspace
+        assert!((run.acc - 100.0 * (1.0 - 1.0 / 26.0)).abs() < 1e-9);
         assert_eq!(run.typos, BTreeMap::from([("t>y".to_string(), 1)]));
         assert_eq!(run.letters["t"].miss, 1);
         // a deleted word retyped differently isn't a pile of typos
         assert!(!run.typos.keys().any(|k| k.starts_with('a')));
-        assert_eq!(c.corrected(), Some(100.0 * 2.0 / 31.0));
+        assert_eq!(c.corrected(), Some(100.0 / 26.0));
+    }
+
+    #[test]
+    fn a_deleted_word_is_as_if_it_was_never_typed() {
+        let t = Instant::now();
+        let typing = |words: &[&str]| {
+            let mut c = Composer::new(None);
+            let mut ms = 0;
+            for (i, w) in words.iter().enumerate() {
+                if *w == "<word>" {
+                    // a long think, then the word goes
+                    ms += 3000;
+                    c.delete_word(at(t, ms));
+                    continue;
+                }
+                if i > 0 {
+                    ms += 150;
+                    c.type_char(' ', at(t, ms));
+                }
+                for ch in w.chars() {
+                    ms += 150;
+                    c.type_char(ch, at(t, ms));
+                }
+            }
+            c
+        };
+        let mut reworded = typing(&["the", "quick", "brwon", "<word>", "<word>", "zap"]);
+        let mut straight = typing(&["the", "quick", "zap"]);
+        // the second word delete goes back over the space, then "quick"
+        // (the helper puts a space before "zap" too)
+        assert_eq!(typed(&reworded), "the  zap");
+        assert_eq!(reworded.corrected(), Some(0.0));
+        assert!(reworded.text().iter().all(|(_, fixed)| !fixed));
+        // nothing about "quick brwon" is left: no keys, no time, no timings
+        let (a, b) = (reworded.take_run(0, 0), straight.take_run(0, 0));
+        assert!(a.is_none() && b.is_none(), "under 20 keys either way");
+        let mut c = typing(&["the", "quick", "brwon", "<word>", "fox", "jumps", "over"]);
+        let run = c.take_run(0, 0).unwrap();
+        let mut d = typing(&["the", "quick", "fox", "jumps", "over"]);
+        let same = d.take_run(0, 0).unwrap();
+        assert_eq!(run.acc, 100.0);
+        assert!(!run.letters.contains_key("b") && !run.letters.contains_key("w"));
+        assert_eq!(run.letters, same.letters);
+        // the pause before the delete times nothing: a gap capped at 2s
+        // stands in for it, so the speed is a hair under the straight run's
+        assert!(
+            run.wpm < same.wpm && run.wpm > same.wpm * 0.8,
+            "{} vs {}",
+            run.wpm,
+            same.wpm
+        );
+    }
+
+    #[test]
+    fn a_word_deleted_after_a_save_only_comes_off_the_totals() {
+        let t = Instant::now();
+        let mut c = Composer::new(None);
+        for i in 0..30 {
+            c.type_char('a', at(t, 100 * i));
+        }
+        let run = c.take_run(0, 0).unwrap();
+        assert_eq!(run.letters["a"].n, 29);
+        c.delete_word(at(t, 4000));
+        assert!(c.is_empty());
+        assert_eq!(c.wpm(), None);
+        c.type_char('b', at(t, 4100));
+        assert!(c.take_run(0, 0).is_none());
+    }
+
+    #[test]
+    fn a_window_drives_the_composer_with_json() {
+        let t = Instant::now();
+        let mut c = Composer::new(None);
+        let key = |c: &mut Composer, line: &str, ms| {
+            let input: Input = serde_json::from_str(line).unwrap();
+            c.apply(input, at(t, ms))
+        };
+        assert!(
+            key(&mut c, r#"{"k":"char","c":"\n"}"#, 0)
+                .segments
+                .is_empty()
+        );
+        key(&mut c, r#"{"k":"char","c":"h"}"#, 100);
+        key(&mut c, r#"{"k":"char","c":"u"}"#, 200);
+        key(&mut c, r#"{"k":"delete"}"#, 300);
+        let s = key(&mut c, r#"{"k":"char","c":"i"}"#, 400);
+        assert_eq!(
+            s.segments,
+            [
+                Segment {
+                    t: "h".into(),
+                    fixed: false
+                },
+                Segment {
+                    t: "i".into(),
+                    fixed: true
+                }
+            ]
+        );
+        assert_eq!(s.send, None);
+        let s = key(&mut c, r#"{"k":"send"}"#, 500);
+        assert_eq!(s.send.as_deref(), Some("hi"));
+        assert!(s.segments.is_empty());
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""send":"hi""#), "{json}");
+        assert!(key(&mut c, r#"{"k":"send"}"#, 600).send.is_none());
     }
 
     #[test]
