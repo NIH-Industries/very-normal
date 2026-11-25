@@ -286,28 +286,37 @@ fn letters(runs: &[&Run]) -> BTreeMap<String, LetterStat> {
     out
 }
 
-/// Each session's best accurate real-text run, and where that line is heading.
+/// A session's best real-text run at the gate's accuracy.
+fn best_real(runs: &[&Run]) -> Option<f64> {
+    runs.iter()
+        .filter(|r| r.mode == "real" && r.acc >= gate::REAL_ACCURACY)
+        .map(|r| r.wpm)
+        .reduce(f64::max)
+}
+
+/// How far real text has come this stage, from your best so far. The best
+/// never goes backwards, so a slow session doesn't read as a step back.
 fn trend(earlier: &[Vec<&Run>], now: &[&Run], target: f64) -> String {
-    let best = |runs: &[&Run]| {
-        runs.iter()
-            .filter(|r| r.mode == "real" && r.acc >= gate::REAL_ACCURACY)
-            .map(|r| r.wpm)
-            .reduce(f64::max)
+    let before: Vec<f64> = earlier.iter().filter_map(|g| best_real(g)).collect();
+    let today = best_real(now);
+    let Some(best) = before.iter().copied().chain(today).reduce(f64::max) else {
+        return "No real-text run at 95%+ yet this stage. It'll come.".into();
     };
-    let mut points: Vec<f64> = earlier.iter().filter_map(|g| best(g)).collect();
-    let keep = if best(now).is_some() { 4 } else { 5 };
-    points = points.split_off(points.len().saturating_sub(keep));
-    points.extend(best(now));
-    match fit(&points, target) {
-        Fit::TooFew => "Not enough sessions yet to see a real-text trend. Give it a few.".into(),
-        Fit::Flat => {
-            "No upward real-text trend yet. That's normal; it'll gradually come together.".into()
-        }
-        Fit::Sessions(sessions) => format!(
-            "At this pace, roughly {sessions} more session{} to reach {target:.0} WPM in real text. It'll gradually come together.",
-            if sessions == 1 { "" } else { "s" }
-        ),
+    let start = before.first().copied().or(today).unwrap_or(best);
+    let mut line = format!("Best so far this stage: {best:.0} WPM");
+    if best.round() > start.round() {
+        line += &format!(" (started at {start:.0})");
     }
+    if best >= target {
+        line += &format!(", past the {target:.0} WPM the gate asks for.");
+    } else {
+        line += &format!(" · {:.0} WPM to go to {target:.0}.", (target - best).ceil());
+    }
+    let previous = before.iter().copied().reduce(f64::max);
+    if matches!((today, previous), (Some(t), Some(p)) if t > p) {
+        line += " A new best today.";
+    }
+    line
 }
 
 /// Sessions with a real-text run at 95%+ before there's a trend to fit.
@@ -321,7 +330,9 @@ enum Fit {
 }
 
 /// Sessions until the real-text trend at `stage` reaches the gate's speed, when
-/// there's an upward trend to go on.
+/// there's an upward trend to go on. The line goes through your best so far at
+/// each session, so a slow session flattens it a little rather than pulling it
+/// back.
 pub fn sessions_to_gate(progress: &Progress, stage: usize) -> Option<u64> {
     let target = progress.baseline()? * gate::SPEED_SHARE;
     let runs: Vec<&Run> = progress
@@ -331,11 +342,10 @@ pub fn sessions_to_gate(progress: &Progress, stage: usize) -> Option<u64> {
         .collect();
     let points: Vec<f64> = coach::group(&runs)
         .iter()
-        .filter_map(|g| {
-            g.iter()
-                .filter(|r| r.acc >= gate::REAL_ACCURACY)
-                .map(|r| r.wpm)
-                .reduce(f64::max)
+        .filter_map(|g| best_real(g))
+        .scan(f64::MIN, |best, wpm| {
+            *best = best.max(wpm);
+            Some(*best)
         })
         .collect();
     let points = &points[points.len().saturating_sub(5)..];
@@ -562,7 +572,8 @@ mod tests {
             "{r:?}"
         );
         assert!(
-            r.iter().any(|l| l.contains("Not enough sessions yet")),
+            r.iter()
+                .any(|l| l == "Best so far this stage: 12 WPM · 15 WPM to go to 27."),
             "{r:?}"
         );
         assert!(r.iter().any(|l| l.starts_with("Still to come")), "{r:?}");
@@ -614,32 +625,59 @@ mod tests {
     }
 
     #[test]
-    fn projects_a_rising_real_text_trend() {
+    fn real_text_shows_the_best_so_far_and_the_gap() {
         let p = progress(vec![
             run(START - 6 * HOUR, "real", 16.0, 96.0),
             run(START - 3 * HOUR, "real", 17.0, 97.0),
             run(START + 60_000, "real", 18.0, 96.0),
         ]);
         let r = session(&p, 1, START).lines();
-        let line = r.last().unwrap();
-        assert!(
-            line.contains("roughly 9 more sessions to reach 27 WPM"),
-            "{line}"
+        assert_eq!(
+            r.last().unwrap(),
+            "Best so far this stage: 18 WPM (started at 16) · 9 WPM to go to 27. A new best today."
         );
         calm(&r);
     }
 
     #[test]
-    fn a_flat_trend_is_normal() {
+    fn a_slow_session_does_not_read_as_a_step_back() {
         let p = progress(vec![
-            run(START - 6 * HOUR, "real", 17.0, 96.0),
-            run(START - 3 * HOUR, "real", 17.0, 97.0),
-            run(START + 60_000, "real", 16.5, 96.0),
+            run(START - 9 * HOUR, "real", 16.0, 96.0),
+            run(START - 6 * HOUR, "real", 20.0, 97.0),
+            run(START - 3 * HOUR, "real", 22.0, 96.0),
+            run(START + 60_000, "real", 15.0, 95.0),
         ]);
         let r = session(&p, 1, START).lines();
-        let line = r.last().unwrap();
-        assert!(line.contains("No upward real-text trend yet"), "{line}");
-        assert!(line.contains("normal"), "{line}");
+        assert_eq!(
+            r.last().unwrap(),
+            "Best so far this stage: 22 WPM (started at 16) · 5 WPM to go to 27."
+        );
+        calm(&r);
+    }
+
+    #[test]
+    fn a_slow_session_barely_moves_the_forecast() {
+        let rising = vec![
+            run(START - 12 * HOUR, "real", 16.0, 96.0),
+            run(START - 9 * HOUR, "real", 18.0, 96.0),
+            run(START - 6 * HOUR, "real", 20.0, 97.0),
+            run(START - 3 * HOUR, "real", 22.0, 96.0),
+        ];
+        let before = sessions_to_gate(&progress(rising.clone()), 1).unwrap();
+        let mut tired = rising;
+        tired.push(run(START, "real", 15.0, 95.0));
+        let after = sessions_to_gate(&progress(tired), 1).unwrap();
+        assert!(
+            after >= before && after <= before + 2,
+            "{before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn no_accurate_real_text_yet() {
+        let p = progress(vec![run(START + 60_000, "real", 18.0, 90.0)]);
+        let r = session(&p, 1, START).lines();
+        assert!(r.last().unwrap().contains("No real-text run at 95%+ yet"));
         calm(&r);
     }
 

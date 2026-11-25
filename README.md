@@ -174,8 +174,9 @@ A guided session has four steps, one screen each:
    picks up where you left off; once a session reaches 10:00, the next one
    starts at 0:00, and so does tomorrow's.
 4. **Report**: this session against your last few, your slowest keys, what's
-   left before the next stage, and roughly how many sessions the real-text
-   trend says it'll take. There's no rush.
+   left before the next stage, and your best real text so far this stage
+   against where you started and the speed the gate asks for. A slow
+   session never shows as a step back. There's no rush.
 
 The dashboard is the long view: every stage of the plan, with the keys it
 moves and a bar for how much of your typing that is (by English letter
@@ -185,7 +186,8 @@ stage, or once that's passed, the Oryx edits to make.
 
 Time guesses only come from your own practice, never a made-up average. The
 stage you're on gets one after three real-text sessions at 95%+, from its
-trend; stages ahead get one once a stage is behind you, from the minutes per
+trend through your best so far at each session, so a slow one barely moves
+it; stages ahead get one once a stage is behind you, from the minutes per
 point of typing moved that it took you. They're ranges in words ("2–4
 weeks"), not dates.
 

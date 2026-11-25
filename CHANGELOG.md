@@ -6,6 +6,8 @@
 - Deleting a word in compose (`alt-backspace` or `ctrl-w`) is a change of mind, not a mistake: the word comes out of your speed, corrections and key timings as if it was never typed. Backspace still counts as a correction.
 - Very Normal Compose, a small floating Mac window (`mac/build --install`), composes into any app, not just a Rex pane: `ctrl-enter` pastes the message into the app you were in and presses Return, and the typing counts into your profile like the compose pane's. `very-normal compose --stdio` is what it talks to: keys as JSON lines in, what to show out.
 - Very Normal Compose lives in the menu bar, and hyper-c (ctrl-opt-cmd-shift-c) opens and closes it from any app. Closing it saves the run and keeps it ready in the menu bar; Quit is in its menu, as is Open at Login.
+- The end-of-session report shows your best real text so far this stage, where you started and how far it is to the speed the gate asks for, with "A new best today" when you beat it. It no longer guesses how many sessions are left, a number one slow session could triple, so a tired morning never reads as a step back.
+- The dashboard's time guess for this stage follows your best so far at each session, so one slow session barely moves it.
 
 ## 0.7.0 - 2026-11-20
 
