@@ -262,8 +262,14 @@ it's open, since it never takes the focus away from that app):
 It counts into the same profile as everything else, through
 `very-normal compose --stdio`.
 
-Build it from a checkout with `mac/build --install`, which puts it in
-`~/Applications`, then open it once with Spotlight. The first time, macOS
+Install it with Homebrew, which brings very-normal too:
+
+```sh
+brew install --cask nih-industries/tap/very-normal-compose
+```
+
+or build it from a checkout with `mac/build --install`, which puts it in
+`~/Applications`. Then open it once with Spotlight. The first time, macOS
 asks you to allow it under Privacy & Security › Accessibility, so it can
 press ⌘V and Return for you. It sends via the clipboard and puts back
 what was there. The copy stays on this Mac (no Universal Clipboard) and is

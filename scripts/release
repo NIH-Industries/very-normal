@@ -14,6 +14,11 @@
 # dist's install instructions.
 # scripts/formula-extra.rb, if there is one, goes inside the generated formula
 # (for caveats and the like).
+# mac/build, if there is one, is a Mac app that ships beside the binaries:
+# `mac/build --release` must leave a notarised zip in tmp/mac/release/ (with
+# --no-notarise for a dry run), which goes on the GitHub release, and
+# mac/cask.rb is its Homebrew cask, pushed to the tap's Casks/ with this
+# version and the zip's sha256.
 #
 # Needs: brew install cargo-dist zig cargo-zigbuild; gh; jj; and
 #   rustup target add x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
@@ -116,6 +121,20 @@ bin=$(find "$host_bin" -type f -perm -u+x | head -1)
 rm -rf "$host_bin"
 if $dry_run; then cargo publish --dry-run --quiet --allow-dirty; else cargo publish --dry-run --quiet; fi
 
+cask=""
+if [[ -x mac/build ]]; then
+  say "Building the Mac app"
+  if $dry_run; then mac/build --release --no-notarise; else mac/build --release; fi
+  mac_zip=$(ls tmp/mac/release/*-"$version".zip)
+  files="$files"$'\n'"$mac_zip"
+  if [[ -f mac/cask.rb ]]; then
+    cask="$distrib/$(sed -n 's/^cask "\(.*\)" do$/\1/p' mac/cask.rb).rb"
+    sha=$(shasum -a 256 "$mac_zip" | cut -d' ' -f1)
+    sed -e "s/^  version \".*\"$/  version \"$version\"/" \
+      -e "s/^  sha256 \".*\"$/  sha256 \"$sha\"/" mac/cask.rb >"$cask"
+  fi
+fi
+
 notes=$(mktemp)
 trap 'rm -f "$notes"' EXIT
 # dist's announcement already includes the changelog's section for this version.
@@ -152,8 +171,10 @@ run cargo publish
 
 say "Updating the Homebrew tap"
 run cp "$formula" "$tap/Formula/"
+[[ -n "$cask" ]] && run mkdir -p "$tap/Casks" && run cp "$cask" "$tap/Casks/"
 if $dry_run; then
   diff -u "$tap/Formula/$(basename "$formula")" "$formula" || true
+  [[ -n "$cask" ]] && { diff -u "$tap/Casks/$(basename "$cask")" "$cask" || true; }
 else
   jj -R "$tap" describe -m "$name $version"
   (cd "$tap" && fish -c push)
@@ -162,3 +183,6 @@ fi
 say "Done: $name $version"
 $dry_run && echo "(dry run: nothing was published or changed)"
 echo "Upgrade with: brew update && brew upgrade $name"
+if [[ -n "$cask" ]]; then
+  echo "The Mac app: brew install --cask $(basename "$cask" .rb)"
+fi
