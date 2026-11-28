@@ -9,7 +9,7 @@ use very_normal::compose::{self, Action, Composer, Screen};
 use very_normal::layout;
 use very_normal::optimise::{self, Options};
 use very_normal::store::{self, Progress};
-use very_normal::{charts, coach, corpus, keymap, named, oryx, plans, profile, report};
+use very_normal::{charts, coach, corpus, keyboard, keymap, named, plans, profile, report};
 
 const HELP: &str = "\
 very-normal: move your keyboard to a layout made from your own typing
@@ -17,8 +17,8 @@ very-normal: move your keyboard to a layout made from your own typing
 usage: very-normal                  a guided session: layout, warm-up, practice
        very-normal dashboard        the whole plan: where you are, roughly how long is left
        very-normal status           what the coach thinks of your practice today
-       very-normal next             the Oryx edits for the next stage, and where to make them
-       very-normal check            read the layout from Oryx and compare it with your stage
+       very-normal next             the keyboard edits for the next stage, and where to make them
+       very-normal check            read your keyboard's layout and compare it with your stage
        very-normal stage <n>        set the stage you're practising (0-9)
        very-normal baseline <wpm>   type in a baseline instead of recording one
        very-normal import <file|->  merge a backup copied out of the web tutor
@@ -37,7 +37,7 @@ usage: very-normal                  a guided session: layout, warm-up, practice
        very-normal profile remove <name>
                                     rename or delete a profile (not the one in use)
        very-normal keymap kanata|karabiner [stage] [--all-keyboards]
-                                    a software keymap for keyboards without Oryx
+                                    a software keymap, for keyboards you can't reprogram
                                     (karabiner: built-in keyboard only, unless --all-keyboards)
        very-normal charts [file] [--no-open]
                                     write your progress as a page of charts and open it
@@ -53,8 +53,9 @@ usage: very-normal                  a guided session: layout, warm-up, practice
 A profile is a folder holding your progress, plan and made plans, in
 ~/.local/share/very-normal/profiles/<name>. main opens unless --profile <name>
 (before or after any command), $VERY_NORMAL_PROFILE=<name> or
-$VERY_NORMAL_HOME=<any folder> says otherwise. The Oryx layout comes
-from your plan ($VERY_NORMAL_LAYOUT); URLs open with `open`, or `xdg-open` on
+$VERY_NORMAL_HOME=<any folder> says otherwise. Your keyboard's layout (a
+layout.txt, or an Oryx layout id) comes from your plan ($VERY_NORMAL_LAYOUT);
+files and URLs open with `open`, or `xdg-open` on
 Linux ($VERY_NORMAL_OPEN, where {url} marks the address). `m` plays SomaFM's
 Drone Zone with mpv or ffplay ($VERY_NORMAL_MUSIC: any stream URL or file).
 ";
@@ -126,13 +127,13 @@ fn main() -> Result<()> {
         ),
         ["next"] => {
             let p = Progress::load(&path)?;
-            for line in report::next_stage(p.stage, &oryx::edit_url(&oryx::layout_id())) {
+            for line in report::next_stage(p.stage, &keyboard::configured().place()) {
                 println!("{line}");
             }
         }
         ["check"] => {
             let p = Progress::load(&path)?;
-            let snap = oryx::fetch(&oryx::layout_id())?;
+            let snap = keyboard::configured().read()?;
             println!("You're practising stage {}.", p.stage);
             for line in report::check(&snap, p.stage) {
                 println!("{line}");

@@ -1,4 +1,5 @@
-//! Reading a layout from Oryx, ZSA's configurator, to check a stage landed.
+//! Reading a layout from Oryx, ZSA's configurator, for a ZSA board's
+//! [`crate::keyboard::Keyboard::Oryx`].
 //!
 //! Oryx has no documented API; this uses the GraphQL endpoint its own page
 //! loads layouts from. It only works for layouts with a public link.
@@ -8,15 +9,7 @@ use std::process::Command;
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 
-use crate::layout;
-
-/// `$VERY_NORMAL_LAYOUT`, or the plan's `oryx_layout`; empty if neither is set.
-pub fn layout_id() -> String {
-    std::env::var("VERY_NORMAL_LAYOUT")
-        .ok()
-        .or_else(|| layout::plan().oryx_layout.clone())
-        .unwrap_or_default()
-}
+use crate::keyboard::{Snapshot, expected_holds, mod_name};
 
 pub fn edit_url(layout: &str) -> String {
     format!("https://configure.zsa.io/voyager/layouts/{layout}/latest/0")
@@ -31,77 +24,6 @@ const SLOTS: [usize; 30] = [
     13, 14, 15, 16, 17, 38, 39, 40, 41, 42,
 ];
 
-/// The Oryx hold codes the plan's home row mods should have.
-fn expected_holds() -> Vec<(usize, String)> {
-    (10..20)
-        .filter_map(|i| {
-            let side = if i % 10 < 5 { "LEFT" } else { "RIGHT" };
-            let code = match layout::modifier(i)? {
-                "ctrl" => "CTRL",
-                "alt" => "ALT",
-                "cmd" => "GUI",
-                _ => "SHIFT",
-            };
-            Some((i, format!("{side}_{code}")))
-        })
-        .collect()
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Snapshot {
-    pub title: String,
-    pub revision: String,
-    pub created: String,
-    /// The main layer's 30 letter keys; `?` where a key isn't a plain character.
-    pub main: Vec<char>,
-    /// What the six home row mod keys do when held.
-    pub holds: Vec<(usize, String)>,
-    /// The mirror layer's 15 left-hand letter keys, if there is a mirror layer.
-    pub mirror: Option<Vec<char>>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Finding {
-    Key {
-        index: usize,
-        got: char,
-        want: char,
-    },
-    Hold {
-        index: usize,
-        got: String,
-        want: String,
-    },
-    Mirror {
-        index: usize,
-        got: char,
-        want: char,
-    },
-}
-
-impl std::fmt::Display for Finding {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Finding::Key { index, got, want } => write!(
-                f,
-                "main layer: the key that started as {} types {got}, should type {want}",
-                layout::keys(0)[*index]
-            ),
-            Finding::Hold { index, got, want } => write!(
-                f,
-                "home row mod: the key that started as {} holds {}, should hold {want}",
-                layout::keys(0)[*index],
-                if got.is_empty() { "nothing" } else { got }
-            ),
-            Finding::Mirror { index, got, want } => write!(
-                f,
-                "mirror layer: the left key that started as {} types {got}, should type {want}",
-                layout::keys(0)[*index]
-            ),
-        }
-    }
-}
-
 pub fn fetch(layout: &str) -> Result<Snapshot> {
     parse(&query(layout)?)
 }
@@ -115,27 +37,13 @@ pub fn home_row_mods(layout: &str) -> Result<Vec<String>> {
 fn holds_of(v: &Value) -> Result<Vec<String>> {
     let main = main_layer(v)?;
     Ok((10..20)
-        .map(|i| {
-            let hold = code(&main[SLOTS[i]], "hold");
-            let m = if hold.ends_with("CTRL") {
-                "ctrl"
-            } else if hold.ends_with("ALT") {
-                "alt"
-            } else if hold.ends_with("GUI") {
-                "cmd"
-            } else if hold.ends_with("SHIFT") {
-                "shift"
-            } else {
-                ""
-            };
-            m.to_string()
-        })
+        .map(|i| mod_name(&code(&main[SLOTS[i]], "hold")).to_string())
         .collect())
 }
 
 fn query(layout: &str) -> Result<Value> {
     if layout.is_empty() {
-        bail!("no Oryx layout: set oryx_layout in your plan, or $VERY_NORMAL_LAYOUT");
+        bail!("no Oryx layout id");
     }
     let query = format!(
         "query {{ layout(hashId: \"{layout}\", geometry: \"voyager\", revisionId: \"latest\") \
@@ -241,9 +149,12 @@ pub fn parse(v: &Value) -> Result<Snapshot> {
             .to_string()
     };
     Ok(Snapshot {
-        title: text("/title"),
-        revision: text("/revision/hashId"),
-        created: text("/revision/createdAt"),
+        source: format!(
+            "Oryx: {} · revision {} · {}",
+            text("/title"),
+            text("/revision/hashId"),
+            text("/revision/createdAt")
+        ),
         main: SLOTS.iter().map(|s| character(&main[*s])).collect(),
         holds: expected_holds()
             .iter()
@@ -253,56 +164,11 @@ pub fn parse(v: &Value) -> Result<Snapshot> {
     })
 }
 
-impl Snapshot {
-    pub fn main_string(&self) -> String {
-        self.main.iter().collect()
-    }
-
-    /// The stage the main layer matches, if it matches one exactly.
-    pub fn stage(&self) -> Option<usize> {
-        layout::find_stage(&self.main_string())
-    }
-
-    /// Everything that differs from the given stage.
-    pub fn compare(&self, stage: usize) -> Vec<Finding> {
-        let want = layout::keys(stage);
-        let mut out: Vec<Finding> = (0..30)
-            .filter(|i| self.main[*i] != want[*i])
-            .map(|index| Finding::Key {
-                index,
-                got: self.main[index],
-                want: want[index],
-            })
-            .collect();
-        for ((index, got), (_, want)) in self.holds.iter().zip(expected_holds()) {
-            if *got != want {
-                out.push(Finding::Hold {
-                    index: *index,
-                    got: got.clone(),
-                    want,
-                });
-            }
-        }
-        if let Some(mirror) = &self.mirror {
-            for (n, got) in mirror.iter().enumerate() {
-                let index = (n / 5) * 10 + n % 5;
-                let want = want[layout::mirror(index)];
-                if *got != want {
-                    out.push(Finding::Mirror {
-                        index,
-                        got: *got,
-                        want,
-                    });
-                }
-            }
-        }
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keyboard::Finding;
+    use crate::layout;
 
     fn fixture(name: &str) -> Snapshot {
         let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -313,7 +179,7 @@ mod tests {
     #[test]
     fn reads_the_planck_layout_as_stage_zero() {
         let s = fixture("oryx-stage0.json");
-        assert_eq!(s.title, "voyager-planck");
+        assert!(s.source.contains("voyager-planck"), "{}", s.source);
         assert_eq!(s.stage(), Some(0));
         assert!(s.compare(0).is_empty());
     }

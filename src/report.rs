@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 
 use crate::drill::Mode;
-use crate::oryx::Snapshot;
+use crate::keyboard::Snapshot;
 use crate::store::{LetterStat, Progress, Run};
 use crate::{coach, gate, layout};
 
-/// The Oryx edits that turn `stage - 1` into `stage`.
+/// The keyboard edits that turn `stage - 1` into `stage`.
 pub fn edits(stage: usize) -> Vec<String> {
     let mut out = Vec::new();
     for c in layout::changes(stage) {
@@ -24,14 +24,14 @@ pub fn edits(stage: usize) -> Vec<String> {
     out
 }
 
-pub fn next_stage(current: usize, url: &str) -> Vec<String> {
+pub fn next_stage(current: usize, place: &str) -> Vec<String> {
     if current >= layout::last() {
         return vec!["You're on the last stage. Nothing left to edit.".into()];
     }
     let next = current + 1;
     let mut out = vec![
         format!("Stage {next}: {}", layout::name(next)),
-        format!("Edit: {url}"),
+        format!("Edit: {place}"),
     ];
     out.extend(edits(next).into_iter().map(|e| format!("  {e}")));
     out.push(format!(
@@ -42,7 +42,7 @@ pub fn next_stage(current: usize, url: &str) -> Vec<String> {
 }
 
 /// The same, squeezed into a few lines for the TUI.
-pub fn next_stage_compact(current: usize, url: &str) -> Vec<String> {
+pub fn next_stage_compact(current: usize, place: &str) -> Vec<String> {
     if current >= layout::last() {
         return vec!["You're on the last stage. Nothing left to edit.".into()];
     }
@@ -69,16 +69,13 @@ pub fn next_stage_compact(current: usize, url: &str) -> Vec<String> {
         out.push(format!("mirror: {}", mirror.join("  ")));
     }
     out.push(format!("vim: {}", layout::vim(next).join(" ")));
-    out.push(url.to_string());
+    out.push(place.to_string());
     out
 }
 
-/// What Oryx says the board is on, measured against the stage you practise.
+/// What your keyboard's layout says it's on, measured against the stage you practise.
 pub fn check(snap: &Snapshot, current: usize) -> Vec<String> {
-    let mut out = vec![format!(
-        "{} · revision {} · {}",
-        snap.title, snap.revision, snap.created
-    )];
+    let mut out = vec![snap.source.clone()];
     let findings = snap.compare(current);
     match snap.stage() {
         Some(s) if s == current && findings.is_empty() => {

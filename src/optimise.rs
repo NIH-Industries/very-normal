@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::json;
 
 use crate::named;
-use crate::{corpus, layout, oryx, plans, store};
+use crate::{corpus, keyboard, layout, layout_file, oryx, plans, store};
 
 /// Every character the 30 keys can hold; one is always left out of a layout.
 const CHARS: &[u8; 31] = b"abcdefghijklmnopqrstuvwxyz;,./'";
@@ -48,6 +48,8 @@ pub struct Options {
     pub from: String,
     /// Keys that stay where they are; by default Q, W, Z, X, C, V and punctuation.
     pub lock: Option<String>,
+    /// A layout.txt your keyboard's firmware is built from.
+    pub layout_file: Option<String>,
     pub oryx_layout: Option<String>,
     pub home_row_mods: Option<Vec<String>>,
     pub per_stage: usize,
@@ -71,6 +73,7 @@ impl Default for Options {
             text: Vec::new(),
             from: "QWERTY".into(),
             lock: None,
+            layout_file: None,
             oryx_layout: None,
             home_row_mods: None,
             per_stage: 2,
@@ -87,7 +90,8 @@ impl Default for Options {
 
 pub const USAGE: &str = "\
 usage: very-normal make-plan [--name NAME] [--from LAYOUT] [--text FILE|FOLDER|- ...]
-                             [--no-claude] [--lock KEYS] [--oryx-layout ID] [--home-row-mods M,M,...]
+                             [--no-claude] [--lock KEYS] [--layout-file FILE | --oryx-layout ID]
+                             [--home-row-mods M,M,...]
                              [--per-stage N] [--restarts N] [--iters N] [--seed N]
                              [--out FILE] [--summary FILE] [--force] [--corpus-out FILE]
 
@@ -104,7 +108,9 @@ for stdin. --no-claude leaves your Claude Code messages out.
 --lock         keys that stay where they are now (default: Q, W, Z, X, C and V for
                their Cmd shortcuts, and , . / '). Each one costs the layout a
                little; --lock '' locks nothing.
---oryx-layout  your Oryx layout id; its home row holds are read from Oryx
+--layout-file  the layout.txt your keyboard's firmware is built from; `check`
+               reads it, and its home row holds come from it
+--oryx-layout  for a ZSA board, your Oryx layout id instead; its holds come from Oryx
 --out          the plan (default plans/<name>.toml in your profile; private)
 --summary      the shareable summary (default next to the plan, as .md)
 --force        replace a plan you made before with the same name
@@ -141,6 +147,7 @@ impl Options {
                 }
                 "--from" => o.from = value(&mut i, flag)?,
                 "--lock" => o.lock = Some(value(&mut i, flag)?),
+                "--layout-file" => o.layout_file = Some(value(&mut i, flag)?),
                 "--oryx-layout" => o.oryx_layout = Some(value(&mut i, flag)?),
                 "--home-row-mods" => {
                     let mods: Vec<String> = value(&mut i, flag)?
@@ -790,15 +797,22 @@ pub fn make(o: &Options) -> Result<Made> {
             out.display()
         );
     }
-    let mods = match (&o.home_row_mods, &o.oryx_layout) {
-        (Some(m), _) => m.clone(),
-        (None, Some(id)) => {
+    let mods = match (&o.home_row_mods, &o.layout_file, &o.oryx_layout) {
+        (Some(m), _, _) => m.clone(),
+        (None, Some(f), _) => {
+            let m = layout_file::home_row_mods(&keyboard::expand(f)).context(
+                "reading your home row holds from your layout (or pass --home-row-mods)",
+            )?;
+            eprintln!("Home row holds from {f}: {}", m.join(","));
+            m
+        }
+        (None, None, Some(id)) => {
             let m = oryx::home_row_mods(id)
                 .context("reading your home row holds from Oryx (or pass --home-row-mods)")?;
             eprintln!("Home row holds from Oryx: {}", m.join(","));
             m
         }
-        (None, None) => Vec::new(),
+        (None, None, None) => Vec::new(),
     };
 
     let (msgs, sources) = gather(o)?;
@@ -900,12 +914,16 @@ pub fn make(o: &Options) -> Result<Made> {
         o.name
     );
     let _ = writeln!(plan, "name = {}", json!(o.name));
-    match &o.oryx_layout {
-        Some(id) => {
+    match (&o.layout_file, &o.oryx_layout) {
+        (Some(f), _) => {
+            let _ = writeln!(plan, "layout_file = {}", json!(f));
+        }
+        (None, Some(id)) => {
             let _ = writeln!(plan, "oryx_layout = {}", json!(id));
         }
-        None => plan.push_str(
-            "# oryx_layout = \"abc12\"   # your Oryx layout id, if you have a ZSA board\n",
+        (None, None) => plan.push_str(
+            "# layout_file = \"~/keyboard/layout.txt\"   # the layout.txt your firmware is built from\n\
+             # oryx_layout = \"abc12\"   # or, for a ZSA board, your Oryx layout id\n",
         ),
     }
     if mods.is_empty() {

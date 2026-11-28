@@ -1,0 +1,88 @@
+# My Voyager layout. `make` turns this into keymap.c; see README.md.
+
+# Colours: a short name for the lights grids, then QMK HSV (hue, saturation,
+# value, each 0-255) or a #hex. The comment is the name ZSA's Oryx gives it.
+color cadmium    =  41 255 255   # Cadmium Yellow #FFF500
+color devil      = 139 198 148   # Devil Blue #217794
+color harlequin  =  74 218 204   # Harlequin Green #4CCC1D
+color magenta    = 221 218 204   # Mystifying Magenta #CC1DB2
+color mitchell   = 139 232 159   # Mitchell Blue #0E7B9F
+color moss       =  41 220 148   # Turtle Moss #949114
+color queen      = 203 218 204   # Prom Queen #9E1DCC
+color seaweed    = 109 236 209   # Seaweed #0FD17A
+color starship   =  41 199 224   # Starship #E0DA31
+color structural = 139 241 210   # Structural Blue #0BA0D2
+color tangerine  =  24 231 213   # Tangerine Haze #D58314
+color violet     = 208 156 143   # Dull Violet #82378F
+
+layer main
+  tab>numbers q   w     l     r      f             y        u      i     o     p  bspc
+  esc         a   s+ctl d+alt t+gui  g             h        j+gui  k+alt e+ctl ;  '
+  shift       z   x     c     v      b             n        m      ,     .     /  enter
+  @mirror     ctl alt   gui   @lower _             _        @upper left  down  up right
+                              spc    gui>numbers   bspc>vim enter
+
+layer lower
+  ~ ! @ # $ %   ^ &    * (    )    _
+  _ _ _ _ _ _   _ unds + {    }    |
+  _ _ _ _ _ _   _ _    _ _    _    _
+  _ _ _ _ _ _   _ _    _ vold volu _
+          _ _   _ _
+lights
+  queen queen queen queen queen queen   . queen queen moss  moss  .
+  .     .     .     .     .     .       . queen queen moss  moss  queen
+  .     .     .     .     .     .       . .     .     .     .     .
+  .     .     .     .     .     .       . .     .     queen queen .
+                          .     .       . .
+
+layer upper
+  ` 1 2 3 4 5   6 7 8 9    0    _
+  _ _ _ _ _ _   _ - = [    ]    \
+  _ _ _ _ _ _   _ _ _ _    _    _
+  _ _ _ _ _ _   _ _ _ vold volu _
+          _ _   _ _
+lights
+  . devil devil devil devil devil   devil devil devil devil devil .
+  . .     .     .     .     .       .     devil devil devil devil devil
+  . .     .     .     .     .       .     .     .     .     .     .
+  . .     .     .     .     .       .     .     .     devil devil .
+                      .     .       .     .
+
+layer numbers
+  _ H-c _ _ _ _   A-C-spc _ _ 7 8 9
+  _ _   _ _ _ _   rgb_tog _ _ 4 5 6
+  _ _   _ _ _ _   rgb_mod _ _ 1 2 3
+  _ _   _ _ _ _   _       _ _ 0 . /
+            _ _   _       _
+lights
+  . seaweed . . . .   seaweed . . mitchell mitchell mitchell
+  . .       . . . .   cadmium . . mitchell mitchell mitchell
+  . .       . . . .   cadmium . . mitchell mitchell mitchell
+  . .       . . . .   .       . . mitchell mitchell mitchell
+                . .   .       .
+
+layer mirror
+  _ p o i u y   _ _ _ _ _ _
+  _ ; e k j h   _ _ _ _ _ _
+  _ / . , m n   _ _ _ _ _ _
+  _ _ _ _ _ _   _ _ _ _ _ _
+          _ _   _ _
+lights
+  . queen queen queen queen queen   . . . . . .
+  . queen queen queen queen queen   . . . . . .
+  . queen queen queen queen queen   . . . . . .
+  . .     .     .     .     .       . . . . . .
+                      .     .       . .
+
+layer vim
+  _ _ _    up   C-u   S-v   0 b w    e   $ _
+  _ _ left down right v     ^ h j    k   l %
+  _ _ _    _    C-d   C-v   { } "gg" S-g _ _
+  _ _ _    _    _     _     _ _ _    _   _ _
+                _     _     _ _
+lights
+  . . .         harlequin tangerine starship   violet     violet     violet     violet     violet  .
+  . . harlequin harlequin harlequin starship   violet     magenta    magenta    magenta    magenta violet
+  . . .         .         tangerine starship   structural structural structural structural .       .
+  . . .         .         .         .          .          .          .          .          .       .
+                          .         .          .          .

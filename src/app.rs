@@ -13,11 +13,12 @@ use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use crate::drill::{Drill, Mode, Rng, build};
 use crate::gate;
 use crate::journey;
+use crate::keyboard::{self, Keyboard};
 use crate::layout;
 use crate::music::Music;
 use crate::store::{Progress, Run};
 use crate::warmup::{self, Warmup};
-use crate::{coach, oryx, report};
+use crate::{coach, report};
 
 const PINK: Color = Color::Magenta;
 const TEAL: Color = Color::Cyan;
@@ -37,7 +38,7 @@ pub enum Phase {
     Practice,
     /// How the session went, and how far off the next stage is.
     Report,
-    /// Everything: stages, drills, the gate and Oryx.
+    /// Everything: stages, drills, the gate and your keyboard's layout.
     Dashboard,
 }
 
@@ -144,9 +145,9 @@ pub struct App {
     rng: Rng,
     /// The result of the last drill, or of the last thing you did.
     message: Option<(String, bool)>,
-    /// The last `c` check against Oryx.
+    /// The last `c` check of your keyboard's layout.
     check: Vec<String>,
-    layout_id: String,
+    keyboard: Keyboard,
     /// Set when the coach said stop and you pressed enter anyway once.
     override_armed: bool,
     /// The warm-up, while it runs.
@@ -250,7 +251,7 @@ impl App {
             rng,
             message: None,
             check: Vec::new(),
-            layout_id: oryx::layout_id(),
+            keyboard: keyboard::configured(),
             override_armed: false,
             warmup: None,
             block: None,
@@ -718,9 +719,9 @@ impl App {
             }
             KeyCode::Char('c' | 'o') if layout::staying() => {}
             KeyCode::Char('c') => {
-                self.check = match oryx::fetch(&self.layout_id) {
+                self.check = match self.keyboard.read() {
                     Ok(snap) => report::check(&snap, stage),
-                    Err(e) => vec![format!("Couldn't read Oryx: {e}")],
+                    Err(e) => vec![format!("Couldn't read your keyboard's layout: {e:#}")],
                 };
             }
             KeyCode::Char('g') => {
@@ -739,10 +740,9 @@ impl App {
                 );
             }
             KeyCode::Char('o') => {
-                let url = oryx::edit_url(&self.layout_id);
-                self.message = Some(match crate::open_url(&url) {
-                    Ok(()) => (format!("Opened {url}"), true),
-                    Err(e) => (format!("Couldn't open {url}: {e}"), false),
+                self.message = Some(match self.keyboard.open() {
+                    Ok(place) => (format!("Opened {place}"), true),
+                    Err(e) => (format!("Couldn't open your keyboard's layout: {e}"), false),
                 });
             }
             KeyCode::Char(c) => {
@@ -959,7 +959,7 @@ impl App {
         }
         frame.render_widget(
             Paragraph::new(
-                "enter session · 1-6 drill · ←/→ stage · g charts · o/c oryx · ? help · q quit",
+                "enter session · 1-6 drill · ←/→ stage · g charts · o/c keyboard · ? help · q quit",
             )
             .style(dim()),
             footer,
@@ -968,7 +968,7 @@ impl App {
     }
 
     /// The dashboard for a plan that stays on the layout you have: how you're
-    /// getting on, with no stages, gate or Oryx.
+    /// getting on, with no stages, gate or keyboard edits.
     fn render_staying(&self, frame: &mut Frame) {
         let [header, _, main, message, footer] = Layout::vertical([
             Constraint::Length(2),
@@ -1502,8 +1502,7 @@ impl App {
 
     fn render_next(&self, frame: &mut Frame, area: Rect) {
         let s = self.stage();
-        let url = oryx::edit_url(&self.layout_id);
-        let mut lines: Vec<Line> = report::next_stage_compact(s, &url)
+        let mut lines: Vec<Line> = report::next_stage_compact(s, &self.keyboard.place())
             .into_iter()
             .map(Line::from)
             .collect();
@@ -1516,7 +1515,7 @@ impl App {
             );
         }
         let block = Block::bordered().title(format!(
-            " gate passed: oryx edits for stage {} (o open · c check) ",
+            " gate passed: keyboard edits for stage {} (o open · c check) ",
             (s + 1).min(layout::last())
         ));
         frame.render_widget(

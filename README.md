@@ -2,7 +2,7 @@
 
 A terminal typing tutor for moving your keyboard from the layout you type on
 now (QWERTY, Dvorak, Colemak or anything else) to a new one a few keys at a
-time, with a bossy coach and checks against your ZSA Oryx layout.
+time, with a bossy coach that checks each stage made it onto your keyboard.
 
 It ships with **Very Normal**, a layout optimised on 318k characters of my
 own typing to Claude Code, with Q, W, Z, X, C and V locked so every Mac
@@ -63,8 +63,10 @@ very-normal make-plan --name "My Layout" --text ~/notes ~/Documents/emails.txt
   Z, X, C and V where they are, for their Cmd shortcuts, and the punctuation
   (`, . /` and `'`). Each locked key costs the layout a little, and
   `--lock ""` locks nothing.
-- `--oryx-layout <id>` reads your home row holds from Oryx, if you have a ZSA
-  board.
+- `--layout-file <file>` is the `layout.txt` your keyboard's firmware is built
+  from (see [Your keyboard](#your-keyboard)): `check` reads it, and your home
+  row holds come from it. `--oryx-layout <id>` does the same from Oryx, for a
+  ZSA board.
 - `very-normal make-plan --help` lists the rest.
 
 It takes a few seconds, and nothing leaves your machine. It writes two files
@@ -113,8 +115,8 @@ takes turns between real text and **weak keys**: everyday words leaning on
 the keys you've been slowest on or missed most lately. Key recall drills the
 whole board. The dashboard shows how you're getting on instead of stages:
 where you started (your first three real-text runs), your last few runs
-against that, your best, and your weakest keys. There's nothing to change in
-Oryx, so `next` and `check` have nothing to say. Switch to a plan that moves
+against that, your best, and your weakest keys. There's nothing to change on
+your keyboard, so `next` and `check` have nothing to say. Switch to a plan that moves
 keys whenever you're curious, and back again: each keeps its own progress.
 
 The drill words are your own when there's enough of your typing to Claude
@@ -129,8 +131,8 @@ from the English sentences of [Tatoeba](https://tatoeba.org) under
 very-normal                  # a guided session: the layout, a warm-up, then practice
 very-normal dashboard        # the whole plan: where you are and roughly how long is left
 very-normal status           # what the coach thinks of your practice today
-very-normal next             # the Oryx edits for the next stage, and the link to make them
-very-normal check            # read the layout from Oryx and compare it with your stage
+very-normal next             # the keyboard edits for the next stage, and where to make them
+very-normal check            # read your keyboard's layout and compare it with your stage
 very-normal plan             # which plan you're on, and its stages
 very-normal make-plan        # make a layout and plan from your own typing
 very-normal use <name>       # switch plans; each keeps its own progress
@@ -182,7 +184,7 @@ The dashboard is the long view: every stage of the plan, with the keys it
 moves and a bar for how much of your typing that is (by English letter
 frequency, so the early stages are the big ones), how long finished stages
 took, and how far into this one you are. Below it, the gate for the next
-stage, or once that's passed, the Oryx edits to make.
+stage, or once that's passed, the keyboard edits to make.
 
 Time guesses only come from your own practice, never a made-up average. The
 stage you're on gets one after three real-text sessions at 95%+, from its
@@ -194,7 +196,7 @@ weeks"), not dates.
 - `enter` starts today's session. `1`–`6` open one drill of your own on the
   drill screen, with no clock: key recall, new keys, review, 60 seconds of
   real text, markdown links, or one-handed mirror practice. `esc` comes back.
-- `←` `→` change stage. `c` checks Oryx and `o` opens the layout there. `g`
+- `←` `→` change stage. `c` checks your keyboard's layout and `o` opens it. `g`
   opens your charts.
 - `k`, `v` and `w` tick the gate's manual boxes.
 
@@ -246,8 +248,8 @@ spent this week, speed, how much you corrected, and where you started.
 
 Very Normal Compose is a small floating window that does the same for any
 app, Rex or not. It lives in the menu bar, and **hyper-c**
-(ctrl-opt-cmd-shift-c: put a Hyper key on your keyboard in Oryx, or on caps
-lock with Karabiner) opens and closes it from anywhere. It types into
+(ctrl-opt-cmd-shift-c: put a Hyper key in your keyboard's firmware, or on
+caps lock with Karabiner) opens and closes it from anywhere. It types into
 whichever app you were in when it opened (or whichever you click into while
 it's open, since it never takes the focus away from that app):
 
@@ -321,9 +323,38 @@ stats, vim commands and drill words for each. See
 
 very-normal loads `plan.toml` from your profile, and falls back to Very Normal when there isn't one.
 
-## Any keyboard
+## Your keyboard
 
-Oryx is only one way to get a stage onto a keyboard. `very-normal keymap
+very-normal works with any keyboard. Each stage moves a few keys, and how
+they move depends on what you've got.
+
+**A keyboard you build firmware for** (QMK and the like): keep the layout in
+a `layout.txt`, drawn in the keyboard's shape, and point your plan at it:
+
+```toml
+layout_file = "~/keyboard/layout.txt"
+```
+
+```
+layer main
+  tab>numbers q   w     l     r      f             y        u      i     o     p  bspc
+  esc         a   s+ctl d+alt t+gui  g             h        j+gui  k+alt e+ctl ;  '
+  shift       z   x     c     v      b             n        m      ,     .     /  enter
+  @mirror     ctl alt   gui   @lower _             _        @upper left  down  up right
+                              spc    gui>numbers   bspc>vim enter
+```
+
+Each layer is four rows of twelve keys and a row of four thumb keys. The
+first layer is the main one, `s+ctl` is S with Ctrl on hold, and a layer
+called `mirror` is checked as the mirror layer. `next` says which keys to
+change in it and `check` reads it back. [voyager-keymap](https://github.com/markryall/voyager-keymap)
+turns a `layout.txt` into QMK firmware for a Voyager.
+
+**A ZSA board edited in Oryx**: `oryx_layout = "abc12"` in your plan (the id
+from the layout's link, which must be public). `next` links to the layout and
+`check` reads it from Oryx.
+
+**Any other keyboard**: remap it in software. `very-normal keymap
 kanata` prints the current stage as a [kanata](https://github.com/jtroo/kanata)
 config (macOS, Linux, Windows), and `very-normal keymap karabiner` prints a
 [Karabiner-Elements](https://karabiner-elements.pqrs.org) complex modification
@@ -349,10 +380,11 @@ laptop can live side by side. The kanata config includes a commented
   summaries, and progress kept for the ones you're not practising). Profiles
   live in `~/.local/share/very-normal/profiles/<name>`, and `main` is the one
   that opens.
-- Oryx layout: the plan's `oryx_layout`, or `$VERY_NORMAL_LAYOUT`. Checking
-  uses the GraphQL endpoint Oryx's own page uses, which is undocumented and
-  needs a public layout link.
-- URLs open with `open` (`xdg-open` on Linux), or `$VERY_NORMAL_OPEN` (`{url}`
+- Your keyboard's layout: the plan's `layout_file` or `oryx_layout`, or
+  `$VERY_NORMAL_LAYOUT` (a path, or an Oryx id). Reading Oryx uses the GraphQL
+  endpoint Oryx's own page uses, which is undocumented and needs a public
+  layout link.
+- Files and URLs open with `open` (`xdg-open` on Linux), or `$VERY_NORMAL_OPEN` (`{url}`
   marks the address).
 
 ### Profiles

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- very-normal no longer assumes a ZSA board. Your plan's `layout_file` points at a `layout.txt`, a layout drawn in your keyboard's shape that firmware like QMK is built from: `next` names it as the place to make each stage's edits, `check` reads it back, and `make-plan --layout-file` takes your home row holds from it. An Oryx layout (`oryx_layout`) still works the same for a ZSA board, and `$VERY_NORMAL_LAYOUT` takes either a path or an Oryx id. The TUI's `o` and `c` open and check whichever you have.
 - Very Normal Compose comes with Homebrew: `brew install --cask nih-industries/tap/very-normal-compose` installs the app and very-normal with it. It's notarised, runs on Apple silicon and Intel Macs, and a build from a checkout (`mac/build --install`) is the same app to macOS, so the Accessibility permission carries over between them.
 
 ## 0.8.0 - 2026-11-26

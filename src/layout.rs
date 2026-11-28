@@ -43,6 +43,10 @@ pub fn outer_right(row: usize) -> String {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Plan {
     pub name: String,
+    /// A layout.txt your keyboard's firmware is built from.
+    #[serde(default)]
+    pub layout_file: Option<String>,
+    /// An Oryx layout id, for a ZSA board.
     #[serde(default)]
     pub oryx_layout: Option<String>,
     /// What each home row key does when held, left to right.
